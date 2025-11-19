@@ -132,10 +132,12 @@ class App {
     this.ensureWizardMarkup();
     document.getElementById('app-container').style.display = 'none';
     document.getElementById('setup-wizard').style.display = 'flex';
-    
+
+    const persistStep = (id) => chrome.storage.sync.set({ wizardStep: id });
     const show = (id) => {
         document.querySelectorAll('.wizard-step').forEach(el => el.classList.remove('active'));
         document.getElementById(id).classList.add('active');
+        persistStep(id);
     }
 
     const step1 = document.getElementById('btn-step-1');
@@ -156,7 +158,7 @@ class App {
     step1.onclick = () => {
         const key = apiInput.value.trim();
         if(!key) return this.toast("API Key Required", "error");
-        chrome.storage.sync.set({geminiKey: key});
+        chrome.storage.sync.set({ geminiKey: key });
         this.state.geminiKey = key;
         show('step-2');
     };
@@ -166,6 +168,7 @@ class App {
         const cid = clientInput.value.trim();
         if(!cid) return this.toast("Client ID Required", "error");
         this.tempCid = cid;
+        chrome.storage.sync.set({ wizardClientId: cid });
         show('step-4');
     }
     back3.onclick = () => show('step-2');
@@ -175,6 +178,27 @@ class App {
         const a = document.createElement('a'); a.href = url; a.download = "manifest.json"; a.click();
     }
     back4.onclick = () => show('step-3');
+
+    chrome.storage.sync.get(['wizardStep', 'wizardClientId', 'geminiKey'], (data) => {
+      if (chrome.runtime.lastError) {
+        console.warn('Wizard state restore failed', chrome.runtime.lastError);
+        return;
+      }
+
+      if (data.geminiKey && !this.state.geminiKey) {
+        this.state.geminiKey = data.geminiKey;
+      }
+      apiInput.value = this.state.geminiKey || '';
+
+      if (data.wizardClientId) {
+        clientInput.value = data.wizardClientId;
+        this.tempCid = data.wizardClientId;
+      }
+
+      const validSteps = new Set(['step-1', 'step-2', 'step-3', 'step-4']);
+      const initialStep = validSteps.has(data.wizardStep) ? data.wizardStep : 'step-1';
+      show(initialStep);
+    });
   }
 
   ensureWizardMarkup() {
@@ -190,6 +214,11 @@ class App {
           <div class="key-input-wrapper" style="margin: 20px 0;">
             <span class="material-icons" style="font-size:16px; color:#009cd6;">key</span>
             <input id="wiz-api-key" type="password" placeholder="Gemini API Key" />
+          </div>
+          <div class="nav-row" style="justify-content:flex-start; gap:12px;">
+            <a class="btn-external" href="https://aistudio.google.com/api-keys" target="_blank" rel="noreferrer noopener">
+              <span class="material-icons">open_in_new</span> Make an API key
+            </a>
           </div>
           <button id="btn-step-1" class="btn-next">Continue</button>
         </div>
