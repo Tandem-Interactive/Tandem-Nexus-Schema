@@ -6,7 +6,7 @@
   "permissions": ["identity", "activeTab", "scripting", "storage", "clipboardWrite"],
   "host_permissions": ["https://tagmanager.googleapis.com/*", "https://generativelanguage.googleapis.com/*"],
   "oauth2": {
-    "client_id": "163493540460-f1gmbbv8a3dt2gstqnpjftgf6ln0lsk0.apps.googleusercontent.com",
+    "client_id": "PLACEHOLDER_CLIENT_ID",
     "scopes": [
       "https://www.googleapis.com/auth/tagmanager.edit.containers",
       "https://www.googleapis.com/auth/tagmanager.readonly",
