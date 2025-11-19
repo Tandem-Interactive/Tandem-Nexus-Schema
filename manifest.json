@@ -1,0 +1,20 @@
+{
+  "name": "Tandem NEXUS Schema",
+  "description": "Enterprise Schema Architect. Visual Editor & AI Integration.",
+  "version": "4.3.0",
+  "manifest_version": 3,
+  "permissions": ["identity", "activeTab", "scripting", "storage", "clipboardWrite"],
+  "host_permissions": ["https://tagmanager.googleapis.com/*", "https://generativelanguage.googleapis.com/*"],
+  "oauth2": {
+    "client_id": "163493540460-f1gmbbv8a3dt2gstqnpjftgf6ln0lsk0.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/tagmanager.edit.containers",
+      "https://www.googleapis.com/auth/tagmanager.readonly",
+      "https://www.googleapis.com/auth/tagmanager.manage.accounts"
+    ]
+  },
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_icon": {"16":"icon16.png","32":"icon32.png","48":"icon48.png","128":"icon128.png"} },
+  "icons": {"16":"icon16.png","32":"icon32.png","48":"icon48.png","128":"icon128.png"},
+  "content_scripts": [{ "matches": ["<all_urls>"], "js": ["content.js"] }]
+}

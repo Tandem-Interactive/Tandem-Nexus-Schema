@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+</head>
+<body>
+
+  <!-- SETTINGS MODAL -->
+  <div id="config-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Settings</h3>
+        <span class="material-icons close-modal" style="cursor:pointer;">close</span>
+      </div>
+      <div class="modal-body">
+        <label class="input-label">Gemini API Key</label>
+        <div class="key-input-wrapper">
+          <span class="material-icons" style="font-size:16px; color:#009cd6;">key</span>
+          <input type="password" id="api-key" placeholder="Paste key here...">
+        </div>
+        
+        <label class="input-label" style="margin-top:15px;">AI Model</label>
+        <div class="select-wrapper">
+          <select id="model-select">
+            <option value="gemini-pro-latest" selected>gemini-pro-latest</option>
+            <option value="gemini-flash-latest">gemini-flash-latest</option>
+            <option value="gemini-3-pro-preview">gemini-3-pro-preview</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="save-config" class="btn-select">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADD BLOCK MODAL -->
+  <div id="add-block-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Add Schema Block</h3>
+        <span class="material-icons close-modal" style="cursor:pointer;">close</span>
+      </div>
+      <div class="modal-body no-pad">
+        <div id="schema-type-list" class="type-list">
+            <!-- Populated dynamically by JS -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- APP CONTAINER -->
+  <div id="app-container">
+    <!-- APP HEADER -->
+    <header>
+      <div class="brand-container">
+        <img src="icon48.png" class="brand-logo" alt="Logo">
+        <div class="brand-text">Tandem <span class="nexus">NEXUS</span><span class="schema">Schema</span></div>
+      </div>
+      <div class="header-controls">
+        <div id="auth-status" class="status-dot offline" title="Auth Status"></div>
+        <button id="settings-btn" class="icon-btn" title="Settings">
+          <span class="material-icons">settings</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- STATUS BAR -->
+    <div class="status-bar">
+      <div class="status-item">
+        <span class="material-icons">link</span>
+        <span id="current-url" class="truncate">Scanning...</span>
+      </div>
+      <div class="status-item">
+        <span class="material-icons">code</span>
+        <span id="gtm-status">...</span>
+      </div>
+    </div>
+
+    <!-- TOOLBAR -->
+    <div class="toolbar">
+      <button id="login-btn" class="btn-login">
+        <span class="material-icons">account_circle</span> Connect Google Account
+      </button>
+      
+      <div class="tool-row">
+        <button id="ai-scan-btn" class="btn-tool magic">
+          <span class="material-icons">auto_awesome</span>
+          <span class="btn-text">AI Generate</span>
+        </button>
+        
+        <div class="spacer"></div>
+        
+        <button id="validate-btn" class="btn-icon-tool" title="Validate">
+          <span class="material-icons">fact_check</span>
+        </button>
+        <button id="undo-btn" class="btn-icon-tool" title="Undo">
+          <span class="material-icons">undo</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- PROGRESS BAR -->
+    <div id="progress-container">
+      <div class="progress-fill" id="progress-fill"></div>
+    </div>
+
+    <!-- TABS -->
+    <div class="tabs">
+      <button class="tab active" data-view="visual">Visual Builder</button>
+      <button class="tab" data-view="json">JSON Source</button>
+    </div>
+
+    <!-- MAIN CONTENT -->
+    <main>
+      <!-- VISUAL VIEW -->
+      <div id="visual-view" class="view active">
+        <div id="visual-editor">
+          <div class="empty-state">
+             <div class="empty-icon-bg">
+               <span class="material-icons">schema</span>
+             </div>
+             <p>No Schema Data</p>
+             <small>Use AI or add a block to start.</small>
+          </div>
+        </div>
+        
+        <!-- Floating Action Button -->
+        <button id="fab-add" class="fab" title="Add Schema Type">
+          <span class="material-icons">add</span>
+        </button>
+      </div>
+
+      <!-- JSON VIEW -->
+      <div id="json-view" class="view">
+        <textarea id="json-editor" spellcheck="false" placeholder="// JSON-LD Output..."></textarea>
+        <div class="editor-footer">
+           <span id="json-validity">Valid JSON</span>
+           <button id="format-json" class="link-btn">Prettify</button>
+        </div>
+      </div>
+    </main>
+
+    <!-- FOOTER -->
+    <div class="action-footer">
+      <button id="publish-btn" class="btn-primary">
+        <span class="material-icons">cloud_upload</span> Publish to GTM
+      </button>
+    </div>
+  </div>
+
+  <!-- TOAST NOTIFICATIONS -->
+  <div id="toast-container"></div>
+
+  <!-- WIZARD (Hidden by default) -->
+  <div id="setup-wizard" class="wizard-overlay" style="display:none;">
+     <!-- Wizard content generated by JS if needed -->
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
