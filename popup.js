@@ -114,6 +114,8 @@ class App {
       modelName: "gemini-pro-latest", // Default Model Updated
       authToken: null,
       schema: {},
+      schemaList: [],
+      currentSchemaIndex: 0,
       url: null,
       gtmId: null
     };
@@ -304,6 +306,7 @@ class App {
     document.getElementById('setup-wizard').style.display = 'none';
     document.getElementById('app-container').style.display = 'flex'; // Flex for column layout
     this.bindUI();
+    this.renderSchemaTabs();
     this.checkAuth();
     this.scanPage();
   }
@@ -331,15 +334,12 @@ class App {
 
     const richResultsBtn = document.getElementById('rich-results-btn');
     if (richResultsBtn) {
-      richResultsBtn.onclick = () => {
-        if (!this.state.url) {
-          this.toast('Scan a page before opening Rich Results Test', 'error');
-          return;
-        }
+      richResultsBtn.onclick = () => this.openGoogleValidator();
+    }
 
-        const testUrl = `https://search.google.com/test/rich-results?url=${encodeURIComponent(this.state.url)}`;
-        chrome.tabs.create({ url: testUrl });
-      };
+    const schemaOrgBtn = document.getElementById('schema-org-btn');
+    if (schemaOrgBtn) {
+      schemaOrgBtn.onclick = () => this.openSchemaValidator();
     }
 
     document.getElementById('settings-btn').onclick = () => {
@@ -368,7 +368,6 @@ class App {
     jsonEditor.oninput = (e) => {
       const value = e.target.value;
       this.updateJsonValidity(value);
-      this.renderHighlightedJson(value);
 
       try {
         const parsed = JSON.parse(value);
@@ -383,7 +382,6 @@ class App {
       if (!raw) {
         this.updateJsonValidity('');
         jsonEditor.value = '';
-        this.renderHighlightedJson('');
         return;
       }
 
@@ -393,7 +391,6 @@ class App {
         jsonEditor.value = pretty;
         this.updateState(parsed, 'json');
         this.updateJsonValidity(pretty);
-        this.renderHighlightedJson(pretty);
       } catch (error) {
         this.updateJsonValidity(raw);
         this.toast('Invalid JSON: unable to prettify', 'error');
@@ -408,8 +405,17 @@ class App {
         document.getElementById(e.target.dataset.view + '-view').classList.add('active');
     });
 
+    const googleValidatorBtn = document.getElementById('open-google-validator');
+    if (googleValidatorBtn) {
+      googleValidatorBtn.onclick = () => this.openGoogleValidator();
+    }
+
+    const schemaValidatorBtn = document.getElementById('open-schema-validator');
+    if (schemaValidatorBtn) {
+      schemaValidatorBtn.onclick = () => this.openSchemaValidator();
+    }
+
     this.updateJsonValidity(jsonEditor.value);
-    this.renderHighlightedJson(jsonEditor.value);
   }
 
   openAddModal() {
@@ -531,19 +537,115 @@ class App {
   addItemToArray(path) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length; i++) ref=ref[path[i]]; if(Array.isArray(ref)) { const tmpl = ref.length > 0 ? JSON.parse(JSON.stringify(ref[0])) : {"@type":"Thing"}; const wipe = (o) => Object.keys(o).forEach(k=>{ if(typeof o[k]==='object') wipe(o[k]); else o[k]=""}); wipe(tmpl); ref.push(tmpl); } this.updateState(s, 'visual'); }
 
   updateState(newSchema, source) {
-    this.state.schema = newSchema;
-    if(source !== 'visual') this.renderVisual(newSchema);
-
-    // We do NOT aggressive clean here to prevent losing data while editing
-    const jsonText = JSON.stringify(newSchema, null, 2);
-    document.getElementById('json-editor').value = jsonText;
-    this.updateJsonValidity(jsonText);
-    this.renderHighlightedJson(jsonText);
-
-    if(this.state.url) {
-        const key = `draft_${btoa(this.state.url).slice(0,32)}`;
-        chrome.storage.local.set({ [key]: newSchema });
+    if (source === 'json') {
+      const list = this.state.schemaList.length ? [...this.state.schemaList] : [];
+      const index = this.state.currentSchemaIndex || 0;
+      list[index] = newSchema;
+      this.state.schemaList = list;
+    } else if (newSchema && Array.isArray(newSchema['@graph'])) {
+      this.state.schemaList = newSchema['@graph'];
+      const maxIndex = Math.max(0, this.state.schemaList.length - 1);
+      this.state.currentSchemaIndex = Math.min(this.state.currentSchemaIndex, maxIndex);
+    } else {
+      this.state.schemaList = [newSchema];
+      this.state.currentSchemaIndex = 0;
     }
+
+    const aggregate = this.state.schemaList.length > 1
+      ? { '@context': 'https://schema.org', '@graph': this.state.schemaList }
+      : this.state.schemaList[0] || {};
+
+    this.state.schema = aggregate;
+
+    if (source !== 'visual') {
+      this.renderVisual(aggregate);
+    }
+
+    const currentSchema = this.state.schemaList[this.state.currentSchemaIndex] || {};
+    const jsonText = JSON.stringify(currentSchema, null, 2);
+    const editor = document.getElementById('json-editor');
+    if (editor) {
+      editor.value = jsonText;
+    }
+    this.updateJsonValidity(jsonText);
+    this.renderSchemaTabs();
+    this.persistDraft(aggregate);
+  }
+
+  persistDraft(schema) {
+    if (!this.state.url) return;
+    const key = `draft_${btoa(this.state.url).slice(0, 32)}`;
+    chrome.storage.local.set({ [key]: schema });
+  }
+
+  applySchemaList(list = []) {
+    const schemas = Array.isArray(list) ? list.filter(Boolean) : [];
+    this.state.schemaList = schemas;
+    this.state.currentSchemaIndex = 0;
+
+    const aggregate = schemas.length > 1
+      ? { '@context': 'https://schema.org', '@graph': schemas }
+      : schemas[0] || {};
+
+    this.state.schema = aggregate;
+    this.renderVisual(aggregate);
+
+    const editor = document.getElementById('json-editor');
+    const current = schemas[0] || {};
+    const jsonText = Object.keys(current).length ? JSON.stringify(current, null, 2) : '';
+    if (editor) editor.value = jsonText;
+    this.updateJsonValidity(jsonText);
+    this.renderSchemaTabs();
+    this.persistDraft(aggregate);
+  }
+
+  setCurrentSchema(index) {
+    if (index < 0 || index >= this.state.schemaList.length) return;
+    this.state.currentSchemaIndex = index;
+
+    const aggregate = this.state.schemaList.length > 1
+      ? { '@context': 'https://schema.org', '@graph': this.state.schemaList }
+      : this.state.schemaList[index] || {};
+
+    this.state.schema = aggregate;
+    const current = this.state.schemaList[index] || {};
+    const jsonText = Object.keys(current).length ? JSON.stringify(current, null, 2) : '';
+    const editor = document.getElementById('json-editor');
+    if (editor) editor.value = jsonText;
+    this.updateJsonValidity(jsonText);
+    this.renderVisual(aggregate);
+    this.renderSchemaTabs();
+    this.persistDraft(aggregate);
+  }
+
+  renderSchemaTabs() {
+    const container = document.getElementById('schema-tab-list');
+    if (!container) return;
+    container.textContent = '';
+
+    if (!this.state.schemaList.length) {
+      const empty = document.createElement('div');
+      empty.className = 'schema-tab';
+      empty.textContent = 'No schema detected';
+      container.appendChild(empty);
+      return;
+    }
+
+    this.state.schemaList.forEach((schema, idx) => {
+      const button = document.createElement('button');
+      button.className = `schema-tab ${idx === this.state.currentSchemaIndex ? 'active' : ''}`;
+
+      const dot = document.createElement('span');
+      dot.className = `status-dot ${schema?.error ? 'offline' : 'online'}`;
+      button.appendChild(dot);
+
+      const label = document.createElement('span');
+      label.textContent = `Schema ${idx + 1}`;
+      button.appendChild(label);
+
+      button.addEventListener('click', () => this.setCurrentSchema(idx));
+      container.appendChild(button);
+    });
   }
 
   // --- SYSTEM ---
@@ -583,7 +685,7 @@ class App {
   async scanPage() {
     chrome.tabs.query({active:true, currentWindow:true}, (tabs) => {
       if(!tabs[0]) return;
-       chrome.tabs.sendMessage(tabs[0].id, {action:"scanPage"}, (res) => {
+      chrome.tabs.sendMessage(tabs[0].id, {action:"scanPage"}, (res) => {
            if (chrome.runtime.lastError || !res) {
              console.warn('Scan request failed', chrome.runtime.lastError);
              this.toast('Unable to scan page context', 'error');
@@ -591,14 +693,13 @@ class App {
            }
 
            this.state.url = res.url; this.state.gtmId = res.gtmId;
-           document.getElementById('current-url').innerText = res.url;
-           document.getElementById('gtm-status').innerText = res.gtmId || "No GTM";
+           document.getElementById('current-url').textContent = res.url;
+           document.getElementById('gtm-status').textContent = res.gtmId || "No GTM";
 
-           // LOADING FIX: Check existing schema properly
-           if(res.existingSchema && res.existingSchema.length > 0) {
-               const found = res.existingSchema.length === 1 ? res.existingSchema[0] : {"@context":"https://schema.org", "@graph":res.existingSchema};
-               this.updateState(found);
-               this.toast(`Loaded ${res.existingSchema.length} Schema Objects!`);
+          if(res.existingSchema && res.existingSchema.length > 0) {
+               this.applySchemaList(res.existingSchema);
+               const warning = res.hadSchemaErrors ? ' (with syntax issues detected)' : '';
+               this.toast(`Loaded ${res.existingSchema.length} Schema Objects${warning}!`);
                return;
            }
 
@@ -691,10 +792,35 @@ class App {
       }
 
       if (data && data[key]) {
-        this.updateState(data[key]);
+        const stored = data[key];
+        if (stored && Array.isArray(stored['@graph'])) {
+          this.applySchemaList(stored['@graph']);
+        } else if (stored) {
+          this.applySchemaList([stored]);
+        }
         this.toast('Restored saved draft');
       }
     });
+  }
+
+  openGoogleValidator() {
+    if (!this.state.url) {
+      this.toast('Scan a page before opening Rich Results Test', 'error');
+      return;
+    }
+
+    const testUrl = `https://search.google.com/test/rich-results?url=${encodeURIComponent(this.state.url)}`;
+    chrome.tabs.create({ url: testUrl });
+  }
+
+  openSchemaValidator() {
+    if (!this.state.url) {
+      this.toast('Scan a page before opening Schema.org Validator', 'error');
+      return;
+    }
+
+    const testUrl = `https://validator.schema.org/#url=${encodeURIComponent(this.state.url)}`;
+    chrome.tabs.create({ url: testUrl });
   }
 
   validateJson() {
@@ -763,41 +889,6 @@ class App {
       indicator.textContent = 'Invalid JSON';
       indicator.classList.add('json-invalid');
     }
-  }
-
-  renderHighlightedJson(text) {
-    const target = document.getElementById('json-highlight');
-    if (!target) return;
-
-    const raw = (text || '').trim();
-    if (!raw) {
-      target.textContent = '// JSON-LD Output...';
-      return;
-    }
-
-    let formatted = raw;
-    try {
-      formatted = JSON.stringify(JSON.parse(raw), null, 2);
-    } catch (error) {
-      // Keep the raw text if it is not valid JSON yet
-    }
-
-    const escaped = this.escapeHtml(formatted);
-    const highlighted = escaped
-      .replace(/(&quot;[^&]*?&quot;)(?=\s*:)/g, '<span class="hl-key">$1</span>')
-      .replace(/: &quot;([^&]*?)&quot;/g, ': <span class="hl-string">&quot;$1&quot;</span>')
-      .replace(/: ([\-0-9.]+)(,?)/g, ': <span class="hl-number">$1</span>$2')
-      .replace(/: (true|false)(,?)/gi, ': <span class="hl-boolean">$1</span>$2')
-      .replace(/: (null)(,?)/gi, ': <span class="hl-null">$1</span>$2');
-
-    target.innerHTML = highlighted;
-  }
-
-  escapeHtml(str) {
-    return (str || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
   }
 }
 

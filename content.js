@@ -4,30 +4,38 @@
 if (!window.hasTandemListener) {
   window.hasTandemListener = true;
 
-  // Helper: Find GTM ID
+  const SCAN_DEBOUNCE_MS = 400;
+  let lastScanResult = { schemas: [], hadErrors: false };
+  let scanTimer = null;
+
+  /**
+   * Find a Google Tag Manager container ID from script tags or raw HTML.
+   */
   function getGtmId() {
-    // Method 1: Check Script Tags
     const scripts = document.getElementsByTagName('script');
-    for (let s of scripts) {
+    for (const s of scripts) {
       if (s.src && s.src.includes('googletagmanager.com/gtm.js')) {
         const match = s.src.match(/[?&]id=(GTM-[A-Z0-9]+)/);
         if (match) return match[1];
       }
     }
-    // Method 2: Check raw HTML (sometimes GTM is inline or hidden)
+
     const html = document.documentElement.innerHTML;
     const match = html.match(/(GTM-[A-Z0-9]{6,})/);
     return match ? match[1] : null;
   }
 
-  // Helper: Sanitize and parse JSON-LD safely
+  /**
+   * Safely sanitize and parse JSON-LD script content.
+   */
   function parseJsonLd(scriptContent) {
-    // Preserve common whitespace while removing control characters that break parsing
-    const cleaned = scriptContent.replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F]+/g, "");
+    const cleaned = (scriptContent || '').replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F]+/g, '');
     return JSON.parse(cleaned);
   }
 
-  // Helper: Build a microdata object recursively
+  /**
+   * Build a microdata object recursively from an itemscope node.
+   */
   function extractMicrodataItem(element) {
     const item = {};
 
@@ -49,7 +57,9 @@ if (!window.hasTandemListener) {
 
       const value = prop.getAttribute('content') || prop.textContent || '';
       if (item[propName]) {
-        item[propName] = Array.isArray(item[propName]) ? [...item[propName], value.trim()] : [item[propName], value.trim()];
+        item[propName] = Array.isArray(item[propName])
+          ? [...item[propName], value.trim()]
+          : [item[propName], value.trim()];
       } else {
         item[propName] = value.trim();
       }
@@ -58,18 +68,21 @@ if (!window.hasTandemListener) {
     return item;
   }
 
-  // Helper: Find Existing Schema
-  function getExistingSchema() {
+  /**
+   * Scan the page for JSON-LD and microdata schemas.
+   */
+  function scanSchemas() {
     const schemas = [];
+    let hadErrors = false;
 
-    // Parse JSON-LD blocks with robust error handling
     const scripts = document.querySelectorAll('script[type="application/ld+json"]');
     scripts.forEach((script) => {
       try {
         const json = parseJsonLd(script.textContent || script.innerText || '');
         schemas.push(json);
-      } catch (e) {
-        console.warn('Tandem Nexus: Invalid JSON-LD found', e);
+      } catch (error) {
+        hadErrors = true;
+        console.warn('Tandem Nexus: Invalid JSON-LD found', error);
         schemas.push({
           error: 'Invalid JSON-LD',
           rawSnippet: (script.textContent || '').trim().slice(0, 120)
@@ -77,7 +90,6 @@ if (!window.hasTandemListener) {
       }
     });
 
-    // Capture Microdata structures (top-level itemscope only)
     const microdataItems = document.querySelectorAll('[itemscope]:not([itemprop])');
     microdataItems.forEach((node) => {
       try {
@@ -86,26 +98,29 @@ if (!window.hasTandemListener) {
           schemas.push({ '@context': 'https://schema.org', ...item });
         }
       } catch (error) {
+        hadErrors = true;
         console.warn('Tandem Nexus: Unable to parse microdata', error);
       }
     });
 
+    lastScanResult = { schemas, hadErrors };
+    updateSchemaStatusBadge();
     return schemas.length > 0 ? schemas : null;
   }
 
-  // Helper: Get Page Context for AI
+  /**
+   * Capture key page content to seed AI prompts.
+   */
   function getPageContent() {
-    const title = document.title || "";
-    const description = document.querySelector('meta[name="description"]')?.content || "";
-    const h1 = document.querySelector('h1')?.innerText || "";
-    
-    // Get Headers structure
+    const title = document.title || '';
+    const description = document.querySelector('meta[name="description"]')?.content || '';
+    const h1 = document.querySelector('h1')?.innerText || '';
+
     const headers = Array.from(document.querySelectorAll('h2, h3'))
       .slice(0, 15)
-      .map(h => `${h.tagName}: ${h.innerText}`)
-      .join("\n");
+      .map((h) => `${h.tagName}: ${h.innerText}`)
+      .join('\n');
 
-    // Get main text content (first 2000 chars)
     const bodyText = document.body.innerText.substring(0, 2000).replace(/\s+/g, ' ');
 
     return `
@@ -120,17 +135,53 @@ if (!window.hasTandemListener) {
     `.trim();
   }
 
+  function updateSchemaStatusBadge() {
+    let status = 'none';
+    if (lastScanResult.hadErrors) {
+      status = 'error';
+    } else if (lastScanResult.schemas.length > 0) {
+      status = 'found';
+    }
+
+    try {
+      chrome.runtime.sendMessage({ type: 'schema-status', status });
+    } catch (error) {
+      // Service worker may be unavailable; ignore transient failures.
+      console.warn('Tandem Nexus: Unable to update action icon', error);
+    }
+  }
+
+  function scheduleRescan() {
+    if (scanTimer) {
+      clearTimeout(scanTimer);
+    }
+    scanTimer = setTimeout(() => {
+      scanSchemas();
+    }, SCAN_DEBOUNCE_MS);
+  }
+
+  // Initial scan and observer for dynamic content.
+  scanSchemas();
+  const observer = new MutationObserver(scheduleRescan);
+  observer.observe(document.documentElement || document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    characterData: true
+  });
+
   // Message Listener
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === "scanPage") {
+    if (request.action === 'scanPage') {
       sendResponse({
         url: window.location.href,
         gtmId: getGtmId(),
         content: getPageContent(),
-        existingSchema: getExistingSchema()
+        existingSchema: scanSchemas(),
+        hadSchemaErrors: lastScanResult.hadErrors
       });
     }
-    // Return true to allow async response if needed
+
     return true;
   });
 }
