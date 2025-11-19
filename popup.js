@@ -13,14 +13,26 @@ const SCHEMA_LIB = {
   "Answer": { icon: "check_circle", fields: ["text"] },
   "BreadcrumbList": { icon: "linear_scale", fields: ["itemListElement"] },
   "OpeningHoursSpecification": { icon: "schedule", fields: ["dayOfWeek", "opens", "closes"] },
-  "VideoObject": { icon: "play_circle", fields: ["name", "description", "thumbnailUrl", "uploadDate"] }
+  "VideoObject": { icon: "play_circle", fields: ["name", "description", "thumbnailUrl", "uploadDate"] },
+  "WebSite": { icon: "public", fields: ["name", "url", "description", "publisher", "potentialAction"] },
+  "WebPage": { icon: "insert_drive_file", fields: ["name", "url", "headline", "description", "datePublished", "dateModified", "breadcrumb"] },
+  "Event": { icon: "event", fields: ["name", "description", "startDate", "endDate", "eventAttendanceMode", "eventStatus", "location", "image", "offers"] },
+  "Person": { icon: "person", fields: ["name", "jobTitle", "url", "image", "sameAs", "worksFor"] },
+  "PostalAddress": { icon: "home", fields: ["streetAddress", "addressLocality", "addressRegion", "postalCode", "addressCountry"] },
+  "GeoCoordinates": { icon: "location_on", fields: ["latitude", "longitude"] },
+  "Offer": { icon: "local_offer", fields: ["price", "priceCurrency", "availability", "url", "priceValidUntil"] },
+  "AggregateOffer": { icon: "stacked_bar_chart", fields: ["lowPrice", "highPrice", "priceCurrency", "offerCount", "offers"] },
+  "Review": { icon: "rate_review", fields: ["author", "datePublished", "reviewBody", "reviewRating"] },
+  "Rating": { icon: "star", fields: ["ratingValue", "bestRating", "worstRating"] }
 };
 
 const FIELD_TYPES = {
   "dayOfWeek": "week_checkbox", "opens": "time", "closes": "time",
   "image": "array", "sameAs": "array", "mainEntity": "nested_array",
   "itemListElement": "nested_array", "offers": "nested_object",
-  "address": "nested_object", "geo": "nested_object", "acceptedAnswer": "nested_object"
+  "address": "nested_object", "geo": "nested_object", "acceptedAnswer": "nested_object",
+  "potentialAction": "nested_object", "publisher": "nested_object", "location": "nested_object",
+  "worksFor": "nested_object", "reviewRating": "nested_object"
 };
 
 // MANIFEST TEMPLATE (For Wizard)
@@ -117,6 +129,7 @@ class App {
 
   // --- WIZARD ---
   initWizard() {
+    this.ensureWizardMarkup();
     document.getElementById('app-container').style.display = 'none';
     document.getElementById('setup-wizard').style.display = 'flex';
     
@@ -125,28 +138,93 @@ class App {
         document.getElementById(id).classList.add('active');
     }
 
-    document.getElementById('btn-step-1').onclick = () => {
-        const key = document.getElementById('wiz-api-key').value.trim();
+    const step1 = document.getElementById('btn-step-1');
+    const step2 = document.getElementById('btn-step-2');
+    const back2 = document.getElementById('back-step-2');
+    const step3 = document.getElementById('btn-step-3');
+    const back3 = document.getElementById('back-step-3');
+    const step4 = document.getElementById('generate-manifest');
+    const back4 = document.getElementById('back-step-4');
+    const apiInput = document.getElementById('wiz-api-key');
+    const clientInput = document.getElementById('new-client-id');
+
+    if (!step1 || !step2 || !back2 || !step3 || !back3 || !step4 || !back4 || !apiInput || !clientInput) {
+      console.error('Wizard markup missing required elements');
+      return;
+    }
+
+    step1.onclick = () => {
+        const key = apiInput.value.trim();
         if(!key) return this.toast("API Key Required", "error");
         chrome.storage.sync.set({geminiKey: key});
         this.state.geminiKey = key;
         show('step-2');
     };
-    document.getElementById('btn-step-2').onclick = () => show('step-3');
-    document.getElementById('back-step-2').onclick = () => show('step-1');
-    document.getElementById('btn-step-3').onclick = () => {
-        const cid = document.getElementById('new-client-id').value.trim();
+    step2.onclick = () => show('step-3');
+    back2.onclick = () => show('step-1');
+    step3.onclick = () => {
+        const cid = clientInput.value.trim();
         if(!cid) return this.toast("Client ID Required", "error");
         this.tempCid = cid;
         show('step-4');
     }
-    document.getElementById('back-step-3').onclick = () => show('step-2');
-    document.getElementById('generate-manifest').onclick = () => {
+    back3.onclick = () => show('step-2');
+    step4.onclick = () => {
         const blob = new Blob([MANIFEST_TEMPLATE(this.tempCid)], {type: "application/json"});
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a'); a.href = url; a.download = "manifest.json"; a.click();
     }
-    document.getElementById('back-step-4').onclick = () => show('step-3');
+    back4.onclick = () => show('step-3');
+  }
+
+  ensureWizardMarkup() {
+    const wizardRoot = document.getElementById('setup-wizard');
+    if (!wizardRoot || wizardRoot.dataset.built === 'true') return;
+
+    wizardRoot.dataset.built = 'true';
+    wizardRoot.innerHTML = `
+      <div class="wizard-card">
+        <div id="step-1" class="wizard-step active">
+          <h3 class="step-title">Welcome to Tandem NEXUS</h3>
+          <p class="text-light">Enter your Gemini API key to begin.</p>
+          <div class="key-input-wrapper" style="margin: 20px 0;">
+            <span class="material-icons" style="font-size:16px; color:#009cd6;">key</span>
+            <input id="wiz-api-key" type="password" placeholder="Gemini API Key" />
+          </div>
+          <button id="btn-step-1" class="btn-next">Continue</button>
+        </div>
+
+        <div id="step-2" class="wizard-step">
+          <h3 class="step-title">Enable Google APIs</h3>
+          <p class="text-light">Ensure Tag Manager API access is enabled for your project.</p>
+          <div class="nav-row">
+            <a class="btn-external" href="https://console.cloud.google.com/apis/library/tagmanager.googleapis.com" target="_blank" rel="noreferrer noopener">
+              <span class="material-icons">open_in_new</span> Open API Library
+            </a>
+          </div>
+          <div class="nav-row">
+            <button id="back-step-2" class="btn-back">Back</button>
+            <button id="btn-step-2" class="btn-next">Next</button>
+          </div>
+        </div>
+
+        <div id="step-3" class="wizard-step">
+          <h3 class="step-title">Add OAuth Client ID</h3>
+          <p class="text-light">Paste the OAuth client ID configured for this extension.</p>
+          <input id="new-client-id" type="text" placeholder="OAuth Client ID" class="schema-input" style="width:100%; margin: 16px 0;" />
+          <div class="nav-row">
+            <button id="back-step-3" class="btn-back">Back</button>
+            <button id="btn-step-3" class="btn-next">Continue</button>
+          </div>
+        </div>
+
+        <div id="step-4" class="wizard-step">
+          <h3 class="step-title">Download Manifest</h3>
+          <p class="text-light">Download the generated manifest and replace the placeholder in your extension.</p>
+          <button id="generate-manifest" class="btn-next" style="margin: 12px 0;">Download manifest.json</button>
+          <button id="back-step-4" class="btn-back" style="width:100%;">Back</button>
+        </div>
+      </div>`;
   }
 
   // --- MAIN APP ---
