@@ -311,6 +311,37 @@ class App {
   bindUI() {
     const jsonEditor = document.getElementById('json-editor');
 
+    const copyJsonBtn = document.getElementById('copy-json');
+    if (copyJsonBtn) {
+      copyJsonBtn.onclick = async () => {
+        const text = (jsonEditor?.value || '').trim();
+        if (!text) {
+          this.toast('No JSON available to copy', 'error');
+          return;
+        }
+        try {
+          await navigator.clipboard.writeText(text);
+          this.toast('JSON copied to clipboard');
+        } catch (error) {
+          console.error('Copy JSON failed', error);
+          this.toast('Unable to copy JSON', 'error');
+        }
+      };
+    }
+
+    const richResultsBtn = document.getElementById('rich-results-btn');
+    if (richResultsBtn) {
+      richResultsBtn.onclick = () => {
+        if (!this.state.url) {
+          this.toast('Scan a page before opening Rich Results Test', 'error');
+          return;
+        }
+
+        const testUrl = `https://search.google.com/test/rich-results?url=${encodeURIComponent(this.state.url)}`;
+        chrome.tabs.create({ url: testUrl });
+      };
+    }
+
     document.getElementById('settings-btn').onclick = () => {
       document.getElementById('api-key').value = this.state.geminiKey || '';
       document.getElementById('model-select').value = this.state.modelName;
@@ -337,6 +368,7 @@ class App {
     jsonEditor.oninput = (e) => {
       const value = e.target.value;
       this.updateJsonValidity(value);
+      this.renderHighlightedJson(value);
 
       try {
         const parsed = JSON.parse(value);
@@ -351,6 +383,7 @@ class App {
       if (!raw) {
         this.updateJsonValidity('');
         jsonEditor.value = '';
+        this.renderHighlightedJson('');
         return;
       }
 
@@ -360,6 +393,7 @@ class App {
         jsonEditor.value = pretty;
         this.updateState(parsed, 'json');
         this.updateJsonValidity(pretty);
+        this.renderHighlightedJson(pretty);
       } catch (error) {
         this.updateJsonValidity(raw);
         this.toast('Invalid JSON: unable to prettify', 'error');
@@ -375,6 +409,7 @@ class App {
     });
 
     this.updateJsonValidity(jsonEditor.value);
+    this.renderHighlightedJson(jsonEditor.value);
   }
 
   openAddModal() {
@@ -503,7 +538,8 @@ class App {
     const jsonText = JSON.stringify(newSchema, null, 2);
     document.getElementById('json-editor').value = jsonText;
     this.updateJsonValidity(jsonText);
-    
+    this.renderHighlightedJson(jsonText);
+
     if(this.state.url) {
         const key = `draft_${btoa(this.state.url).slice(0,32)}`;
         chrome.storage.local.set({ [key]: newSchema });
@@ -727,6 +763,41 @@ class App {
       indicator.textContent = 'Invalid JSON';
       indicator.classList.add('json-invalid');
     }
+  }
+
+  renderHighlightedJson(text) {
+    const target = document.getElementById('json-highlight');
+    if (!target) return;
+
+    const raw = (text || '').trim();
+    if (!raw) {
+      target.textContent = '// JSON-LD Output...';
+      return;
+    }
+
+    let formatted = raw;
+    try {
+      formatted = JSON.stringify(JSON.parse(raw), null, 2);
+    } catch (error) {
+      // Keep the raw text if it is not valid JSON yet
+    }
+
+    const escaped = this.escapeHtml(formatted);
+    const highlighted = escaped
+      .replace(/(&quot;[^&]*?&quot;)(?=\s*:)/g, '<span class="hl-key">$1</span>')
+      .replace(/: &quot;([^&]*?)&quot;/g, ': <span class="hl-string">&quot;$1&quot;</span>')
+      .replace(/: ([\-0-9.]+)(,?)/g, ': <span class="hl-number">$1</span>$2')
+      .replace(/: (true|false)(,?)/gi, ': <span class="hl-boolean">$1</span>$2')
+      .replace(/: (null)(,?)/gi, ': <span class="hl-null">$1</span>$2');
+
+    target.innerHTML = highlighted;
+  }
+
+  escapeHtml(str) {
+    return (str || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 }
 

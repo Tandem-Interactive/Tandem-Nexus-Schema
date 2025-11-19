@@ -176,6 +176,15 @@ main {
 
 /* --- JSON EDITOR --- */
 #json-view { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 16px; }
+.json-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.json-actions .btn-icon-tool { gap: 6px; }
+.code-preview { border: 1px solid var(--border); border-radius: 6px; background: #0f172a; color: #e5e7eb; padding: 10px; max-height: 160px; overflow: auto; margin-bottom: 8px; }
+#json-preview { margin: 0; white-space: pre; font-family: 'Fira Code', 'Source Code Pro', monospace; font-size: 12px; }
+.hl-key { color: #93c5fd; }
+.hl-string { color: #34d399; }
+.hl-number { color: #fbbf24; }
+.hl-boolean { color: #f472b6; }
+.hl-null { color: #f472b6; font-style: italic; }
 #json-editor { width: 100%; flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px; resize: none; box-sizing: border-box; }
 .editor-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 11px; color: var(--text-light); }
 .json-valid { color: var(--success); font-weight: 600; }

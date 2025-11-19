@@ -20,18 +20,76 @@ if (!window.hasTandemListener) {
     return match ? match[1] : null;
   }
 
-  // Helper: Find Existing Schema
-  function getExistingSchema() {
-    const scripts = document.querySelectorAll('script[type="application/ld+json"]');
-    const schemas = [];
-    scripts.forEach(script => {
-      try {
-        const json = JSON.parse(script.innerText);
-        schemas.push(json);
-      } catch (e) {
-        // Ignore invalid JSON
+  // Helper: Sanitize and parse JSON-LD safely
+  function parseJsonLd(scriptContent) {
+    // Preserve common whitespace while removing control characters that break parsing
+    const cleaned = scriptContent.replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F]+/g, "");
+    return JSON.parse(cleaned);
+  }
+
+  // Helper: Build a microdata object recursively
+  function extractMicrodataItem(element) {
+    const item = {};
+
+    const type = element.getAttribute('itemtype');
+    if (type) item['@type'] = type.trim();
+
+    const id = element.getAttribute('itemid');
+    if (id) item['@id'] = id.trim();
+
+    const properties = element.querySelectorAll('[itemprop]');
+    properties.forEach((prop) => {
+      const propName = prop.getAttribute('itemprop');
+      if (!propName) return;
+
+      if (prop.hasAttribute('itemscope')) {
+        item[propName] = extractMicrodataItem(prop);
+        return;
+      }
+
+      const value = prop.getAttribute('content') || prop.textContent || '';
+      if (item[propName]) {
+        item[propName] = Array.isArray(item[propName]) ? [...item[propName], value.trim()] : [item[propName], value.trim()];
+      } else {
+        item[propName] = value.trim();
       }
     });
+
+    return item;
+  }
+
+  // Helper: Find Existing Schema
+  function getExistingSchema() {
+    const schemas = [];
+
+    // Parse JSON-LD blocks with robust error handling
+    const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+    scripts.forEach((script) => {
+      try {
+        const json = parseJsonLd(script.textContent || script.innerText || '');
+        schemas.push(json);
+      } catch (e) {
+        console.warn('Tandem Nexus: Invalid JSON-LD found', e);
+        schemas.push({
+          error: 'Invalid JSON-LD',
+          rawSnippet: (script.textContent || '').trim().slice(0, 120)
+        });
+      }
+    });
+
+    // Capture Microdata structures (top-level itemscope only)
+    const microdataItems = document.querySelectorAll('[itemscope]:not([itemprop])');
+    microdataItems.forEach((node) => {
+      try {
+        const item = extractMicrodataItem(node);
+        if (Object.keys(item).length > 0) {
+          schemas.push({ '@context': 'https://schema.org', ...item });
+        }
+      } catch (error) {
+        console.warn('Tandem Nexus: Unable to parse microdata', error);
+      }
+    });
+
     return schemas.length > 0 ? schemas : null;
   }
 
