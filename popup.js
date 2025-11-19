@@ -47,20 +47,40 @@ const MANIFEST_TEMPLATE = (cid) => `{
 
 // --- NETWORK CLIENT ---
 class NetworkClient {
-  constructor() { this.MAX_RETRIES = 20; this.BASE_DELAY = 2000; this.MAX_DELAY = 10000; }
+  constructor() {
+    this.MAX_RETRIES = 20;
+    this.BASE_DELAY = 2000;
+    this.MAX_DELAY = 10000;
+  }
+
   async fetchWithRetry(url, options, onProgress) {
     let attempt = 0;
+    let lastError = null;
+
     while (attempt < this.MAX_RETRIES) {
       try {
         const response = await fetch(url, options);
-        if (response.ok) return await response.json();
-      } catch (error) {}
+        if (response.ok) {
+          return await response.json();
+        }
+
+        const errorBody = await response.text();
+        lastError = new Error(`Request failed with status ${response.status}: ${errorBody}`);
+      } catch (error) {
+        lastError = error;
+      }
+
       attempt++;
-      if (attempt >= this.MAX_RETRIES) throw new Error("Max retries reached.");
+      if (attempt >= this.MAX_RETRIES) {
+        throw lastError || new Error("Max retries reached.");
+      }
+
       const delay = Math.min(this.MAX_DELAY, this.BASE_DELAY * Math.pow(1.2, attempt));
       if (onProgress) onProgress(attempt, this.MAX_RETRIES, delay);
-      await new Promise(r => setTimeout(r, delay));
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
+
+    throw lastError || new Error("Max retries reached.");
   }
 }
 
@@ -310,20 +330,69 @@ class App {
   }
 
   async runAI() {
-    if(!this.state.geminiKey) return this.toast("API Key Required", "error");
-    const btn = document.getElementById('ai-scan-btn'); btn.innerHTML = 'Thinking...';
+    if (!this.state.geminiKey) {
+      this.toast("API Key Required", "error");
+      return;
+    }
+
+    const btn = document.getElementById('ai-scan-btn');
+    btn.disabled = true;
+    btn.innerHTML = 'Thinking...';
     document.getElementById('progress-container').style.display = 'block';
-    chrome.tabs.query({active:true, currentWindow:true}, (tabs) => {
-        chrome.tabs.sendMessage(tabs[0].id, {action:"scanPage"}, async (res) => {
-            const prompt = `Generate JSON-LD Schema for:\n${res.content}\nStrict JSON only.`;
-            try {
-                const data = await this.net.fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${this.state.modelName}:generateContent?key=${this.state.geminiKey}`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({contents:[{parts:[{text:prompt}]}]})}, (a,m) => document.querySelector('.progress-fill').style.width = `${(a/m)*100}%`);
-                let txt = data.candidates[0].content.parts[0].text.replace(/```json/g,'').replace(/```/g,'').trim();
-                this.updateState(JSON.parse(txt)); this.toast("AI Generated!");
-            } catch(e) { this.toast("AI Error", "error"); }
-            btn.innerHTML = '<span class="material-icons">auto_awesome</span><span class="btn-text">AI Generate</span>'; document.getElementById('progress-container').style.display = 'none';
-        });
+
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs || !tabs[0]) {
+        this.toast("No active tab found", "error");
+        this.resetAiButton(btn);
+        return;
+      }
+
+      chrome.tabs.sendMessage(tabs[0].id, { action: "scanPage" }, async (res) => {
+        if (chrome.runtime.lastError || !res) {
+          this.toast("Unable to scan page", "error");
+          this.resetAiButton(btn);
+          return;
+        }
+
+        const prompt = `Generate JSON-LD Schema for:\n${res.content}\nStrict JSON only.`;
+
+        try {
+          const data = await this.net.fetchWithRetry(
+            `https://generativelanguage.googleapis.com/v1beta/models/${this.state.modelName}:generateContent?key=${this.state.geminiKey}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+            },
+            (a, m) => document.querySelector('.progress-fill').style.width = `${(a / m) * 100}%`
+          );
+
+          const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (!candidateText) {
+            throw new Error("No AI response content");
+          }
+
+          const sanitized = candidateText.replace(/```json/g, '').replace(/```/g, '').trim();
+          const parsed = JSON.parse(sanitized);
+
+          this.updateState(parsed);
+          this.toast("AI Generated!");
+        } catch (error) {
+          console.error('AI generation failed', error);
+          const message = error instanceof Error ? error.message : 'AI Error';
+          this.toast(message, "error");
+        } finally {
+          this.resetAiButton(btn);
+        }
+      });
     });
+  }
+
+  resetAiButton(btn) {
+    btn.disabled = false;
+    btn.innerHTML = '<span class="material-icons">auto_awesome</span><span class="btn-text">AI Generate</span>';
+    document.getElementById('progress-container').style.display = 'none';
+    document.querySelector('.progress-fill').style.width = '0%';
   }
 
   async publish() {
