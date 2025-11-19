@@ -309,6 +309,8 @@ class App {
   }
 
   bindUI() {
+    const jsonEditor = document.getElementById('json-editor');
+
     document.getElementById('settings-btn').onclick = () => {
       document.getElementById('api-key').value = this.state.geminiKey || '';
       document.getElementById('model-select').value = this.state.modelName;
@@ -327,12 +329,41 @@ class App {
     document.getElementById('fab-add').onclick = () => this.openAddModal();
     document.getElementById('login-btn').onclick = () => this.login();
     document.getElementById('ai-scan-btn').onclick = () => this.runAI();
+    document.getElementById('validate-btn').onclick = () => this.validateJson();
     document.getElementById('publish-btn').onclick = () => this.publish();
     document.getElementById('undo-btn').onclick = () => this.scanPage();
 
     // JSON Editor Sync
-    document.getElementById('json-editor').oninput = (e) => {
-      try { const j = JSON.parse(e.target.value); this.state.schema = j; this.renderVisual(j); } catch(e){}
+    jsonEditor.oninput = (e) => {
+      const value = e.target.value;
+      this.updateJsonValidity(value);
+
+      try {
+        const parsed = JSON.parse(value);
+        this.updateState(parsed, 'json');
+      } catch (err) {
+        // Ignore parse errors while typing; validity indicator communicates state.
+      }
+    };
+
+    document.getElementById('format-json').onclick = () => {
+      const raw = jsonEditor.value.trim();
+      if (!raw) {
+        this.updateJsonValidity('');
+        jsonEditor.value = '';
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(raw);
+        const pretty = JSON.stringify(parsed, null, 2);
+        jsonEditor.value = pretty;
+        this.updateState(parsed, 'json');
+        this.updateJsonValidity(pretty);
+      } catch (error) {
+        this.updateJsonValidity(raw);
+        this.toast('Invalid JSON: unable to prettify', 'error');
+      }
     };
     
     // Tab Switch
@@ -342,6 +373,8 @@ class App {
         e.target.classList.add('active');
         document.getElementById(e.target.dataset.view + '-view').classList.add('active');
     });
+
+    this.updateJsonValidity(jsonEditor.value);
   }
 
   openAddModal() {
@@ -465,9 +498,11 @@ class App {
   updateState(newSchema, source) {
     this.state.schema = newSchema;
     if(source !== 'visual') this.renderVisual(newSchema);
-    
+
     // We do NOT aggressive clean here to prevent losing data while editing
-    document.getElementById('json-editor').value = JSON.stringify(newSchema, null, 2);
+    const jsonText = JSON.stringify(newSchema, null, 2);
+    document.getElementById('json-editor').value = jsonText;
+    this.updateJsonValidity(jsonText);
     
     if(this.state.url) {
         const key = `draft_${btoa(this.state.url).slice(0,32)}`;
@@ -511,20 +546,27 @@ class App {
   
   async scanPage() {
     chrome.tabs.query({active:true, currentWindow:true}, (tabs) => {
-       if(!tabs[0]) return;
+      if(!tabs[0]) return;
        chrome.tabs.sendMessage(tabs[0].id, {action:"scanPage"}, (res) => {
-           if(res) {
-               this.state.url = res.url; this.state.gtmId = res.gtmId;
-               document.getElementById('current-url').innerText = res.url;
-               document.getElementById('gtm-status').innerText = res.gtmId || "No GTM";
-               
-               // LOADING FIX: Check existing schema properly
-               if(res.existingSchema && res.existingSchema.length > 0) {
-                   const found = res.existingSchema.length === 1 ? res.existingSchema[0] : {"@context":"https://schema.org", "@graph":res.existingSchema};
-                   this.updateState(found);
-                   this.toast(`Loaded ${res.existingSchema.length} Schema Objects!`);
-               }
+           if (chrome.runtime.lastError || !res) {
+             console.warn('Scan request failed', chrome.runtime.lastError);
+             this.toast('Unable to scan page context', 'error');
+             return;
            }
+
+           this.state.url = res.url; this.state.gtmId = res.gtmId;
+           document.getElementById('current-url').innerText = res.url;
+           document.getElementById('gtm-status').innerText = res.gtmId || "No GTM";
+
+           // LOADING FIX: Check existing schema properly
+           if(res.existingSchema && res.existingSchema.length > 0) {
+               const found = res.existingSchema.length === 1 ? res.existingSchema[0] : {"@context":"https://schema.org", "@graph":res.existingSchema};
+               this.updateState(found);
+               this.toast(`Loaded ${res.existingSchema.length} Schema Objects!`);
+               return;
+           }
+
+           this.restoreDraft();
        });
     });
   }
@@ -549,6 +591,7 @@ class App {
 
       chrome.tabs.sendMessage(tabs[0].id, { action: "scanPage" }, async (res) => {
         if (chrome.runtime.lastError || !res) {
+          console.warn('AI scan request failed', chrome.runtime.lastError);
           this.toast("Unable to scan page", "error");
           this.resetAiButton(btn);
           return;
@@ -601,7 +644,90 @@ class App {
      this.toast("Sending to GTM...");
   }
 
+  restoreDraft() {
+    if (!this.state.url) return;
+
+    const key = `draft_${btoa(this.state.url).slice(0,32)}`;
+    chrome.storage.local.get([key], (data) => {
+      if (chrome.runtime.lastError) {
+        console.warn('Draft restore failed', chrome.runtime.lastError);
+        return;
+      }
+
+      if (data && data[key]) {
+        this.updateState(data[key]);
+        this.toast('Restored saved draft');
+      }
+    });
+  }
+
+  validateJson() {
+    const editor = document.getElementById('json-editor');
+    if (!editor) return;
+
+    const raw = editor.value || '';
+    const trimmed = raw.trim();
+    this.updateJsonValidity(trimmed);
+
+    if (!trimmed) {
+      this.toast('No JSON to validate', 'error');
+      return;
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch (error) {
+      this.toast('JSON is invalid: unable to parse', 'error');
+      return;
+    }
+
+    const issues = [];
+    if (Array.isArray(parsed) || typeof parsed !== 'object' || parsed === null) {
+      issues.push('Root should be a JSON object.');
+    }
+    if (!parsed['@context']) {
+      issues.push('Missing @context.');
+    }
+    if (!parsed['@type'] && !parsed['@graph']) {
+      issues.push('Schema should include @type or @graph.');
+    }
+    if (parsed['@graph'] && !Array.isArray(parsed['@graph'])) {
+      issues.push('@graph must be an array.');
+    }
+
+    if (issues.length === 0) {
+      this.toast('JSON-LD looks valid');
+      this.updateState(parsed, 'json');
+    } else {
+      this.toast(issues.join(' '), 'error');
+    }
+  }
+
   toast(msg, type="info") { const t = document.createElement('div'); t.className = `toast ${type}`; t.innerText = msg; document.getElementById('toast-container').appendChild(t); setTimeout(()=>t.remove(), 3000); }
+
+  updateJsonValidity(text) {
+    const indicator = document.getElementById('json-validity');
+    if (!indicator) return;
+
+    indicator.classList.remove('json-valid', 'json-invalid', 'json-empty');
+
+    const trimmed = (text || '').trim();
+    if (!trimmed) {
+      indicator.textContent = 'No JSON';
+      indicator.classList.add('json-empty');
+      return;
+    }
+
+    try {
+      JSON.parse(trimmed);
+      indicator.textContent = 'Valid JSON';
+      indicator.classList.add('json-valid');
+    } catch (err) {
+      indicator.textContent = 'Invalid JSON';
+      indicator.classList.add('json-invalid');
+    }
+  }
 }
 
 const app = new App();
