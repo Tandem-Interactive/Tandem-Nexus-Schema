@@ -91,11 +91,17 @@
           <span class="material-icons">auto_awesome</span>
           <span class="btn-text">AI Generate</span>
         </button>
-        
+
         <div class="spacer"></div>
-        
+
         <button id="validate-btn" class="btn-icon-tool" title="Validate">
           <span class="material-icons">fact_check</span>
+        </button>
+        <button id="rich-results-btn" class="btn-icon-tool" title="Rich Results Test">
+          <span class="material-icons">open_in_new</span>
+        </button>
+        <button id="schema-org-btn" class="btn-icon-tool" title="Schema.org Validator">
+          <span class="material-icons">language</span>
         </button>
         <button id="undo-btn" class="btn-icon-tool" title="Undo">
           <span class="material-icons">undo</span>
@@ -137,19 +143,27 @@
       <!-- JSON VIEW -->
       <div id="json-view" class="view">
         <div class="json-actions">
-          <button id="copy-json" class="btn-icon-tool">
+          <div class="schema-switcher" id="schema-switcher">
+            <div class="schema-switcher__label">Schema Blocks</div>
+            <div id="schema-tab-list" class="schema-tab-list"></div>
+          </div>
+        </div>
+        <div class="code-wrapper">
+          <button id="copy-json" class="btn-icon-tool copy-float" title="Copy JSON">
             <span class="material-icons">content_copy</span>
-            <span class="btn-text">Copy JSON</span>
           </button>
-          <button id="rich-results-btn" class="btn-icon-tool">
-            <span class="material-icons">open_in_new</span>
-            <span class="btn-text">Rich Results Test</span>
+          <textarea id="json-editor" spellcheck="false" placeholder="// JSON-LD Output..."></textarea>
+        </div>
+        <div class="validator-actions">
+          <button id="open-google-validator" class="btn-tool validator-btn">
+            <span class="material-icons">launch</span>
+            <span class="btn-text">Google Rich Results</span>
+          </button>
+          <button id="open-schema-validator" class="btn-tool validator-btn">
+            <span class="material-icons">launch</span>
+            <span class="btn-text">Schema.org Validator</span>
           </button>
         </div>
-        <div class="code-preview">
-          <pre id="json-preview"><code id="json-highlight"></code></pre>
-        </div>
-        <textarea id="json-editor" spellcheck="false" placeholder="// JSON-LD Output..."></textarea>
         <div class="editor-footer">
            <span id="json-validity">Valid JSON</span>
            <button id="format-json" class="link-btn">Prettify</button>

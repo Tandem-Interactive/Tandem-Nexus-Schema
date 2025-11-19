@@ -175,17 +175,21 @@ main {
 .fab:hover { transform: scale(1.1); background: var(--tandem-blue); }
 
 /* --- JSON EDITOR --- */
-#json-view { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 16px; }
-.json-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-.json-actions .btn-icon-tool { gap: 6px; }
-.code-preview { border: 1px solid var(--border); border-radius: 6px; background: #0f172a; color: #e5e7eb; padding: 10px; max-height: 160px; overflow: auto; margin-bottom: 8px; }
-#json-preview { margin: 0; white-space: pre; font-family: 'Fira Code', 'Source Code Pro', monospace; font-size: 12px; }
-.hl-key { color: #93c5fd; }
-.hl-string { color: #34d399; }
-.hl-number { color: #fbbf24; }
-.hl-boolean { color: #f472b6; }
-.hl-null { color: #f472b6; font-style: italic; }
-#json-editor { width: 100%; flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px; resize: none; box-sizing: border-box; }
+#json-view { display: none; flex-direction: column; overflow: hidden; padding-bottom: 16px; }
+#json-view.view.active { display: flex; }
+.json-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.json-actions .schema-switcher { width: 100%; }
+.schema-switcher__label { font-size: 11px; color: var(--text-light); margin-bottom: 6px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px; }
+.schema-tab-list { display: flex; gap: 8px; flex-wrap: wrap; }
+.schema-tab { border: 1px solid var(--border); padding: 6px 10px; border-radius: 6px; background: white; cursor: pointer; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; color: var(--text-main); }
+.schema-tab.active { border-color: var(--tandem-blue); color: var(--tandem-blue); background: #eff6ff; }
+.schema-tab .status-dot { width: 8px; height: 8px; }
+.code-wrapper { position: relative; }
+.copy-float { position: absolute; top: 10px; right: 10px; z-index: 2; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+#json-view .btn-icon-tool { display: inline-flex; align-items: center; gap: 6px; }
+#json-editor { width: 100%; flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px; resize: none; box-sizing: border-box; background: #0b1220; color: #e5e7eb; }
+.validator-actions { display: flex; gap: 8px; margin: 10px 0 0; flex-wrap: wrap; }
+.validator-btn { flex: 1; justify-content: center; }
 .editor-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 11px; color: var(--text-light); }
 .json-valid { color: var(--success); font-weight: 600; }
 .json-invalid { color: var(--error); font-weight: 600; }
