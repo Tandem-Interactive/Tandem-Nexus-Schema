@@ -557,9 +557,9 @@ class App {
 
     this.state.schema = aggregate;
 
-    if (source !== 'visual') {
-      this.renderVisual(aggregate);
-    }
+    // Always re-render the visual view so UI updates reflect schema mutations
+    // triggered from both the JSON editor and the visual builder.
+    this.renderVisual(aggregate);
 
     const currentSchema = this.state.schemaList[this.state.currentSchemaIndex] || {};
     const jsonText = JSON.stringify(currentSchema, null, 2);
