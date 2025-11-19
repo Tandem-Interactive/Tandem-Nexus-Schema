@@ -4,14 +4,19 @@
  */
 
 const SCHEMA_LIB = {
-  "Organization": { icon: "business", fields: ["name", "url", "logo", "sameAs", "contactPoint"] },
+  "Thing": { icon: "category", fields: ["name", "url", "description"] },
+  "Organization": { icon: "business", fields: ["name", "url", "logo", "sameAs", "contactPoint", "address", "telephone"] },
   "LocalBusiness": { icon: "store", fields: ["name", "image", "telephone", "email", "address", "geo", "priceRange", "openingHoursSpecification"] },
+  "ProfessionalService": { icon: "handshake", fields: ["name", "image", "telephone", "email", "address", "openingHoursSpecification", "areaServed"] },
+  "Place": { icon: "place", fields: ["name", "image", "address", "geo", "telephone", "openingHoursSpecification", "priceRange"] },
   "Product": { icon: "shopping_bag", fields: ["name", "image", "description", "sku", "brand", "offers", "aggregateRating"] },
   "Article": { icon: "article", fields: ["headline", "image", "datePublished", "dateModified", "author", "publisher"] },
   "FAQPage": { icon: "quiz", fields: ["mainEntity"] },
   "Question": { icon: "help", fields: ["name", "acceptedAnswer"] },
   "Answer": { icon: "check_circle", fields: ["text"] },
   "BreadcrumbList": { icon: "linear_scale", fields: ["itemListElement"] },
+  "ListItem": { icon: "format_list_numbered", fields: ["position", "name", "item"] },
+  "AggregateRating": { icon: "star_half", fields: ["ratingValue", "bestRating", "worstRating", "ratingCount", "reviewCount", "itemReviewed"] },
   "OpeningHoursSpecification": { icon: "schedule", fields: ["dayOfWeek", "opens", "closes"] },
   "VideoObject": { icon: "play_circle", fields: ["name", "description", "thumbnailUrl", "uploadDate"] },
   "WebSite": { icon: "public", fields: ["name", "url", "description", "publisher", "potentialAction"] },
@@ -23,7 +28,11 @@ const SCHEMA_LIB = {
   "Offer": { icon: "local_offer", fields: ["price", "priceCurrency", "availability", "url", "priceValidUntil"] },
   "AggregateOffer": { icon: "stacked_bar_chart", fields: ["lowPrice", "highPrice", "priceCurrency", "offerCount", "offers"] },
   "Review": { icon: "rate_review", fields: ["author", "datePublished", "reviewBody", "reviewRating"] },
-  "Rating": { icon: "star", fields: ["ratingValue", "bestRating", "worstRating"] }
+  "Rating": { icon: "star", fields: ["ratingValue", "bestRating", "worstRating"] },
+  "ImageObject": { icon: "image", fields: ["url", "contentUrl", "caption", "width", "height"] },
+  "EntryPoint": { icon: "input", fields: ["urlTemplate", "actionPlatform"] },
+  "SearchAction": { icon: "search", fields: ["target", "query-input"] },
+  "ReadAction": { icon: "menu_book", fields: ["target"] }
 };
 
 const FIELD_TYPES = {
@@ -32,7 +41,8 @@ const FIELD_TYPES = {
   "itemListElement": "nested_array", "offers": "nested_object",
   "address": "nested_object", "geo": "nested_object", "acceptedAnswer": "nested_object",
   "potentialAction": "nested_object", "publisher": "nested_object", "location": "nested_object",
-  "worksFor": "nested_object", "reviewRating": "nested_object"
+  "worksFor": "nested_object", "reviewRating": "nested_object", "itemReviewed": "nested_object",
+  "target": "nested_object"
 };
 
 // MANIFEST TEMPLATE (For Wizard)
@@ -149,6 +159,8 @@ class App {
     const back4 = document.getElementById('back-step-4');
     const apiInput = document.getElementById('wiz-api-key');
     const clientInput = document.getElementById('new-client-id');
+    const extensionIdDisplay = document.getElementById('extension-id-value');
+    const copyExtensionBtn = document.getElementById('copy-extension-id');
 
     if (!step1 || !step2 || !back2 || !step3 || !back3 || !step4 || !back4 || !apiInput || !clientInput) {
       console.error('Wizard markup missing required elements');
@@ -178,6 +190,22 @@ class App {
         const a = document.createElement('a'); a.href = url; a.download = "manifest.json"; a.click();
     }
     back4.onclick = () => show('step-3');
+
+    const extensionId = chrome.runtime.id || 'Unavailable';
+    if (extensionIdDisplay) {
+      extensionIdDisplay.textContent = extensionId;
+    }
+    if (copyExtensionBtn) {
+      copyExtensionBtn.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(extensionId);
+          this.toast("Extension ID copied");
+        } catch (error) {
+          console.error('Copy failed', error);
+          this.toast("Copy failed", "error");
+        }
+      };
+    }
 
     chrome.storage.sync.get(['wizardStep', 'wizardClientId', 'geminiKey'], (data) => {
       if (chrome.runtime.lastError) {
@@ -240,6 +268,21 @@ class App {
         <div id="step-3" class="wizard-step">
           <h3 class="step-title">Add OAuth Client ID</h3>
           <p class="text-light">Paste the OAuth client ID configured for this extension.</p>
+          <div class="info-box">
+            <div class="info-row">
+              <span class="material-icons info-icon">extension</span>
+              <div class="info-text">
+                <div class="info-label">Extension ID</div>
+                <div id="extension-id-value" class="info-value">Loading...</div>
+              </div>
+              <button id="copy-extension-id" class="copy-btn" title="Copy extension ID">
+                <span class="material-icons">content_copy</span>
+              </button>
+            </div>
+          </div>
+          <a class="btn-external" href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noreferrer noopener">
+            <span class="material-icons">open_in_new</span> Open OAuth Client IDs
+          </a>
           <input id="new-client-id" type="text" placeholder="OAuth Client ID" class="schema-input" style="width:100%; margin: 16px 0;" />
           <div class="nav-row">
             <button id="back-step-3" class="btn-back">Back</button>
@@ -327,18 +370,37 @@ class App {
 
   // --- VISUAL RENDERER (FIXED DATA FLOW) ---
   renderVisual(data) {
-    const container = document.getElementById('visual-editor'); 
+    const container = document.getElementById('visual-editor');
     container.innerHTML = '';
-    
-    let items = [];
-    if(data['@graph']) items = data['@graph'];
-    else if(Object.keys(data).length > 0) items = [data];
 
-    if(items.length === 0) {
+    const cards = [];
+    const traverse = (node, path = []) => {
+      if (!node || typeof node !== 'object') return;
+
+      if (Array.isArray(node)) {
+        node.forEach((entry, idx) => traverse(entry, [...path, idx]));
+        return;
+      }
+
+      if (node['@type']) {
+        cards.push({ item: node, path });
+      }
+
+      if (Array.isArray(node['@graph'])) {
+        node['@graph'].forEach((entry, idx) => traverse(entry, [...path, '@graph', idx]));
+      }
+    };
+
+    if (Array.isArray(data['@graph'])) {
+      data['@graph'].forEach((entry, idx) => traverse(entry, ['@graph', idx]));
+    } else {
+      traverse(data, []);
+    }
+
+    if(cards.length === 0) {
         container.innerHTML = `<div class="empty-state"><div class="empty-icon-bg"><span class="material-icons">schema</span></div><p>No Schema Data</p><small>Use AI or click '+' to add.</small></div>`;
     } else {
-        items.forEach((item, index) => {
-            const path = data['@graph'] ? ['@graph', index] : [];
+        cards.forEach(({ item, path }) => {
             container.appendChild(this.createCard(item, path));
         });
     }
@@ -350,12 +412,13 @@ class App {
   }
 
   createCard(item, path) {
-    const type = item['@type'] || 'Thing';
-    const def = SCHEMA_LIB[type] || { icon: 'code', fields: [] };
+    const primaryType = Array.isArray(item['@type']) ? item['@type'][0] : item['@type'] || 'Thing';
+    const displayType = Array.isArray(item['@type']) ? item['@type'].join(', ') : (item['@type'] || 'Thing');
+    const def = SCHEMA_LIB[primaryType] || { icon: 'code', fields: [] };
     const keys = new Set([...(def.fields || []), ...Object.keys(item).filter(k => !k.startsWith('@'))]);
-    
+
     const card = document.createElement('div'); card.className = 'schema-card';
-    card.innerHTML = `<div class="card-header"><div class="card-title"><span class="material-icons">${def.icon}</span> ${type}</div><div class="card-actions"><span class="material-icons delete-card" style="color:#ef4444; cursor:pointer;">delete</span><span class="material-icons expand-icon">expand_more</span></div></div><div class="card-body"></div>`;
+    card.innerHTML = `<div class="card-header"><div class="card-title"><span class="material-icons">${def.icon}</span> ${displayType}</div><div class="card-actions"><span class="material-icons delete-card" style="color:#ef4444; cursor:pointer;">delete</span><span class="material-icons expand-icon">expand_more</span></div></div><div class="card-body"></div>`;
     
     card.querySelector('.card-header').onclick = (e) => { if(!e.target.closest('.delete-card')) card.classList.toggle('collapsed'); };
     card.querySelector('.delete-card').onclick = () => this.deletePath(path);
@@ -413,8 +476,38 @@ class App {
   }
 
   // --- SYSTEM ---
-  async checkAuth() { chrome.identity.getAuthToken({interactive: false}, (t) => { if(t) { this.state.authToken = t; document.getElementById('auth-status').className = 'status-dot online'; document.getElementById('login-btn').style.display = 'none'; } }); }
-  async login() { chrome.identity.getAuthToken({interactive: true}, (t) => { if(t) { this.state.authToken = t; document.getElementById('auth-status').className = 'status-dot online'; document.getElementById('login-btn').style.display = 'none'; } }); }
+  setAuthStatus(isOnline) {
+    const dot = document.getElementById('auth-status');
+    if (!dot) return;
+
+    dot.classList.remove('online', 'offline');
+    dot.classList.add(isOnline ? 'online' : 'offline');
+    document.getElementById('login-btn').style.display = isOnline ? 'none' : 'block';
+  }
+
+  async checkAuth() {
+    chrome.identity.getAuthToken({ interactive: false }, (t) => {
+      if (chrome.runtime.lastError || !t) {
+        this.setAuthStatus(false);
+        return;
+      }
+
+      this.state.authToken = t;
+      this.setAuthStatus(true);
+    });
+  }
+
+  async login() {
+    chrome.identity.getAuthToken({ interactive: true }, (t) => {
+      if (chrome.runtime.lastError || !t) {
+        this.setAuthStatus(false);
+        return;
+      }
+
+      this.state.authToken = t;
+      this.setAuthStatus(true);
+    });
+  }
   
   async scanPage() {
     chrome.tabs.query({active:true, currentWindow:true}, (tabs) => {

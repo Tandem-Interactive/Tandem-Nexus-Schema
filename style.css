@@ -216,3 +216,11 @@ main {
 .btn-back { background: white; border: 1px solid var(--border); color: var(--text-light); padding: 12px 20px; border-radius: 6px; font-weight: 600; cursor: pointer; flex: 1; }
 .btn-external { display: flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--border); padding: 12px; border-radius: 6px; text-decoration: none; color: var(--text-main); font-weight: 600; font-size: 13px; margin-bottom: 15px; background: #f9fafb; width: 100%; }
 .nav-row { display: flex; gap: 10px; margin-top: 10px; }
+.info-box { border: 1px solid var(--border); background: #f9fafb; border-radius: 8px; padding: 10px 12px; margin: 14px 0; text-align: left; }
+.info-row { display: flex; align-items: center; gap: 10px; }
+.info-icon { color: var(--tandem-blue); }
+.info-text { flex: 1; }
+.info-label { font-size: 11px; color: var(--text-light); margin-bottom: 2px; }
+.info-value { font-size: 13px; font-weight: 700; color: var(--tandem-navy); word-break: break-all; }
+.copy-btn { border: 1px solid var(--border); background: white; border-radius: 6px; padding: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.copy-btn:hover { background: #eff6ff; border-color: var(--tandem-blue); }
