@@ -136,6 +136,19 @@
 
       <!-- JSON VIEW -->
       <div id="json-view" class="view">
+        <div class="json-actions">
+          <button id="copy-json" class="btn-icon-tool">
+            <span class="material-icons">content_copy</span>
+            <span class="btn-text">Copy JSON</span>
+          </button>
+          <button id="rich-results-btn" class="btn-icon-tool">
+            <span class="material-icons">open_in_new</span>
+            <span class="btn-text">Rich Results Test</span>
+          </button>
+        </div>
+        <div class="code-preview">
+          <pre id="json-preview"><code id="json-highlight"></code></pre>
+        </div>
         <textarea id="json-editor" spellcheck="false" placeholder="// JSON-LD Output..."></textarea>
         <div class="editor-footer">
            <span id="json-validity">Valid JSON</span>
