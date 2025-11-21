@@ -54,6 +54,13 @@ header {
 .status-dot.offline { background: var(--error); }
 .icon-btn { background: none; border: none; cursor: pointer; color: var(--text-light); padding: 6px; border-radius: 50%; transition: 0.2s; }
 .icon-btn:hover { background: #f3f4f6; color: var(--tandem-navy); }
+.icon-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.rotating { animation: spin 1s linear infinite; }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 
 /* --- STATUS BAR --- */
 .status-bar { 

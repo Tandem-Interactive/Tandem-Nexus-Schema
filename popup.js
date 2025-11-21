@@ -657,6 +657,16 @@ class App {
     return Array.isArray(type) ? type[0] : (type || null);
   }
 
+  getValueAtPath(path, source) {
+    const target = source || this.state.schema;
+    let ref = target;
+    for (let i = 0; i < path.length; i++) {
+      if (ref === undefined || ref === null) return null;
+      ref = ref[path[i]];
+    }
+    return ref === undefined ? null : ref;
+  }
+
   // --- VISUAL RENDERER (FIXED DATA FLOW) ---
   renderVisual(data) {
     const container = document.getElementById('visual-editor');
@@ -707,9 +717,14 @@ class App {
     const keys = new Set([...(def.fields || []), ...Object.keys(item).filter(k => !k.startsWith('@'))]);
 
     const card = document.createElement('div'); card.className = 'schema-card';
-    card.innerHTML = `<div class="card-header"><div class="card-title"><span class="material-icons">${def.icon}</span> ${displayType}</div><div class="card-actions"><span class="material-icons delete-card" style="color:#ef4444; cursor:pointer;">delete</span><span class="material-icons expand-icon">expand_more</span></div></div><div class="card-body"></div>`;
+    card.innerHTML = `<div class="card-header"><div class="card-title"><span class="material-icons">${def.icon}</span> ${displayType}</div><div class="card-actions"><button class="icon-btn ai-generate-card" title="AI generate this schema"><span class="material-icons">auto_awesome</span></button><span class="material-icons delete-card" style="color:#ef4444; cursor:pointer;">delete</span><span class="material-icons expand-icon">expand_more</span></div></div><div class="card-body"></div>`;
 
     card.querySelector('.card-header').onclick = (e) => { if(!e.target.closest('.delete-card')) card.classList.toggle('collapsed'); };
+    const aiBtn = card.querySelector('.ai-generate-card');
+    aiBtn.onclick = (e) => {
+      e.stopPropagation();
+      this.runAIForCard(path, primaryType, aiBtn);
+    };
     card.querySelector('.delete-card').onclick = () => this.deletePath(path);
 
     const body = card.querySelector('.card-body');
@@ -781,7 +796,26 @@ class App {
   }
 
   // --- DATA MODIFIERS ---
-  modifyPath(path, val) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length-1; i++) { if(!ref[path[i]]) ref[path[i]]={}; ref=ref[path[i]]; } ref[path[path.length-1]] = val; this.updateState(s, 'visual'); }
+  modifyPath(path, val) {
+    if (!path.length) {
+      const baseContext = this.state.schema['@context'] || 'https://schema.org';
+      const rootValue = typeof val === 'object' && val !== null ? { '@context': baseContext, ...val } : val;
+      this.updateState(rootValue, 'visual');
+      return;
+    }
+
+    let s = JSON.parse(JSON.stringify(this.state.schema));
+    let ref = s;
+    for (let i = 0; i < path.length - 1; i++) {
+      const key = path[i];
+      if (ref[key] === undefined) {
+        ref[key] = typeof path[i + 1] === 'number' ? [] : {};
+      }
+      ref = ref[key];
+    }
+    ref[path[path.length - 1]] = val;
+    this.updateState(s, 'visual');
+  }
   deletePath(path) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length-1; i++) ref=ref[path[i]]; const last = path[path.length-1]; if(Array.isArray(ref)) ref.splice(last, 1); else delete ref[last]; this.updateState(s, 'visual'); }
   updateType(path, typeName) { const next = JSON.parse(JSON.stringify(this.state.schema)); let ref = next; for (let i = 0; i < path.length; i++) { if (!ref[path[i]]) ref[path[i]] = {}; ref = ref[path[i]]; } if (ref && typeof ref === 'object') { ref['@type'] = typeName || 'Thing'; this.updateState(next, 'visual'); } }
   addItemToArray(path) {
@@ -989,53 +1023,105 @@ class App {
     btn.innerHTML = 'Thinking...';
     document.getElementById('progress-container').style.display = 'block';
 
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (!tabs || !tabs[0]) {
-        this.toast("No active tab found", "error");
+    try {
+      const res = await this.scanActivePage();
+      const prompt = `Generate JSON-LD Schema for:\n${res.content}\nStrict JSON only.`;
+
+      try {
+        const data = await this.net.fetchWithRetry(
+          `https://generativelanguage.googleapis.com/v1beta/models/${this.state.modelName}:generateContent?key=${this.state.geminiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+          },
+          (a, m) => document.querySelector('.progress-fill').style.width = `${(a / m) * 100}%`
+        );
+
+        const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!candidateText) {
+          throw new Error("No AI response content");
+        }
+
+        const sanitized = candidateText.replace(/```json/g, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(sanitized);
+
+        this.updateState(parsed);
+        this.toast("AI Generated!");
+      } catch (error) {
+        console.error('AI generation failed', error);
+        const message = error instanceof Error ? error.message : 'AI Error';
+        this.toast(message, "error");
+      } finally {
         this.resetAiButton(btn);
-        return;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to scan page';
+      this.toast(message, 'error');
+      this.resetAiButton(btn);
+    }
+  }
+
+  async runAIForCard(path, typeName, button) {
+    if (!this.state.geminiKey) {
+      this.toast('API Key Required', 'error');
+      return;
+    }
+
+    if (!typeName) {
+      this.toast('Schema type required', 'error');
+      return;
+    }
+
+    const targetBtn = button;
+    const originalHtml = targetBtn?.innerHTML;
+    if (targetBtn) {
+      targetBtn.disabled = true;
+      targetBtn.innerHTML = '<span class="material-icons rotating">autorenew</span>';
+    }
+
+    try {
+      const res = await this.scanActivePage();
+      const existing = this.getValueAtPath(path) || {};
+      const prompt = `Generate a JSON-LD object for schema.org type "${typeName}" using the following page context. Only return a single JSON object (not wrapped in @graph or arrays) with @type set to ${typeName}. Preserve existing values when useful.\nPage Context:\n${res.content}\nExisting Data (optional):\n${JSON.stringify(existing)}`;
+
+      const data = await this.net.fetchWithRetry(
+        `https://generativelanguage.googleapis.com/v1beta/models/${this.state.modelName}:generateContent?key=${this.state.geminiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        }
+      );
+
+      const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!candidateText) {
+        throw new Error('No AI response content');
       }
 
-      chrome.tabs.sendMessage(tabs[0].id, { action: "scanPage" }, async (res) => {
-        if (chrome.runtime.lastError || !res) {
-          console.warn('AI scan request failed', chrome.runtime.lastError);
-          this.toast("Unable to scan page", "error");
-          this.resetAiButton(btn);
-          return;
-        }
+      const sanitized = candidateText.replace(/```json/g, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(sanitized);
+      const nextValue = Array.isArray(parsed) ? parsed[0] : parsed;
+      if (!nextValue || typeof nextValue !== 'object') {
+        throw new Error('AI response was not an object');
+      }
 
-        const prompt = `Generate JSON-LD Schema for:\n${res.content}\nStrict JSON only.`;
+      if (!nextValue['@type']) {
+        nextValue['@type'] = typeName;
+      }
 
-        try {
-          const data = await this.net.fetchWithRetry(
-            `https://generativelanguage.googleapis.com/v1beta/models/${this.state.modelName}:generateContent?key=${this.state.geminiKey}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-            },
-            (a, m) => document.querySelector('.progress-fill').style.width = `${(a / m) * 100}%`
-          );
-
-          const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (!candidateText) {
-            throw new Error("No AI response content");
-          }
-
-          const sanitized = candidateText.replace(/```json/g, '').replace(/```/g, '').trim();
-          const parsed = JSON.parse(sanitized);
-
-          this.updateState(parsed);
-          this.toast("AI Generated!");
-        } catch (error) {
-          console.error('AI generation failed', error);
-          const message = error instanceof Error ? error.message : 'AI Error';
-          this.toast(message, "error");
-        } finally {
-          this.resetAiButton(btn);
-        }
-      });
-    });
+      this.modifyPath(path, nextValue);
+      this.toast(`Updated ${typeName} with AI`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'AI Error';
+      console.error('AI generation for card failed', error);
+      this.toast(message, 'error');
+    } finally {
+      if (targetBtn) {
+        targetBtn.disabled = false;
+        targetBtn.innerHTML = originalHtml;
+      }
+    }
   }
 
   resetAiButton(btn) {
@@ -1134,6 +1220,26 @@ class App {
     } else {
       this.toast(issues.join(' '), 'error');
     }
+  }
+
+  async scanActivePage() {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs || !tabs[0]) {
+          reject(new Error('No active tab found'));
+          return;
+        }
+
+        chrome.tabs.sendMessage(tabs[0].id, { action: 'scanPage' }, (res) => {
+          if (chrome.runtime.lastError || !res) {
+            reject(new Error('Unable to scan page'));
+            return;
+          }
+
+          resolve(res);
+        });
+      });
+    });
   }
 
   toast(msg, type="info") { const t = document.createElement('div'); t.className = `toast ${type}`; t.innerText = msg; document.getElementById('toast-container').appendChild(t); setTimeout(()=>t.remove(), 3000); }
