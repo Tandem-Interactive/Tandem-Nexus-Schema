@@ -45,6 +45,23 @@ const FIELD_TYPES = {
   "target": "nested_object"
 };
 
+// When creating new blocks or nested structures, default them to useful schema shapes
+const DEFAULT_NESTED_TYPES = {
+  address: "PostalAddress",
+  geo: "GeoCoordinates",
+  acceptedAnswer: "Answer",
+  potentialAction: "SearchAction",
+  publisher: "Organization",
+  location: "Place",
+  worksFor: "Organization",
+  reviewRating: "Rating",
+  itemReviewed: "Thing",
+  offers: "Offer",
+  mainEntity: "Thing",
+  itemListElement: "ListItem",
+  target: "EntryPoint"
+};
+
 // MANIFEST TEMPLATE (For Wizard)
 const MANIFEST_TEMPLATE = (cid) => `{
   "name": "Tandem NEXUS Schema",
@@ -142,12 +159,26 @@ class App {
 
   setupWindowResizeHandle() {
     const handle = document.getElementById('popup-resize-handle');
-    if (!handle || typeof window.resizeTo !== 'function') return;
+    if (!handle) return;
 
     const MIN_HEIGHT = 720;
     const MAX_HEIGHT = 1200;
     let startY = 0;
     let startHeight = window.outerHeight || document.documentElement.clientHeight;
+
+    const applyHeight = (height) => {
+      if (chrome?.windows?.update) {
+        chrome.windows.getCurrent((win) => {
+          if (chrome.runtime.lastError || !win?.id) return;
+          chrome.windows.update(win.id, { height });
+        });
+      }
+      if (typeof window.resizeTo === 'function') {
+        window.resizeTo(window.outerWidth, height);
+      }
+      document.documentElement.style.height = `${height}px`;
+      document.body.style.height = `${height}px`;
+    };
 
     const stopDrag = () => {
       document.body.classList.remove('is-resizing');
@@ -163,7 +194,7 @@ class App {
         MAX_HEIGHT,
         Math.max(MIN_HEIGHT, startHeight + delta)
       );
-      window.resizeTo(window.outerWidth, targetHeight);
+      applyHeight(targetHeight);
     };
 
     handle.addEventListener('mousedown', (event) => {
@@ -470,8 +501,10 @@ class App {
 
   addBlock(type) {
     const block = { "@type": type };
-    if(SCHEMA_LIB[type].fields) SCHEMA_LIB[type].fields.forEach(f => block[f] = "");
-    
+    if(SCHEMA_LIB[type].fields) {
+      SCHEMA_LIB[type].fields.forEach(f => block[f] = this.defaultValueForField(f));
+    }
+
     let current = this.state.schema;
     if(Object.keys(current).length === 0) current = { "@context": "https://schema.org", ...block };
     else if(current['@graph']) current['@graph'].push(block);
@@ -479,6 +512,20 @@ class App {
     
     this.updateState(current);
     document.getElementById('add-block-modal').style.display = 'none';
+  }
+
+  defaultValueForField(fieldName) {
+    const type = FIELD_TYPES[fieldName];
+    if (type === 'nested_object') {
+      const defaultType = DEFAULT_NESTED_TYPES[fieldName];
+      return defaultType ? { '@type': defaultType } : {};
+    }
+    if (type === 'nested_array') {
+      const defaultType = DEFAULT_NESTED_TYPES[fieldName];
+      return defaultType ? [{ '@type': defaultType }] : [];
+    }
+    if (type === 'array') return [];
+    return "";
   }
 
   // --- VISUAL RENDERER (FIXED DATA FLOW) ---
@@ -554,11 +601,27 @@ class App {
                value.forEach((v, i) => nest.appendChild(this.createCard(v, [...path, i])));
                const btn = document.createElement('button'); btn.className = 'btn-add-nested'; btn.innerText = '+ Add Item'; btn.onclick = () => this.addItemToArray(path); nest.appendChild(btn);
            } else {
-               const txt = document.createElement('textarea'); txt.className = 'schema-input'; txt.value = value.join('\n'); 
+               const txt = document.createElement('textarea'); txt.className = 'schema-input'; txt.value = value.join('\n');
                txt.onchange = (e) => this.modifyPath(path, e.target.value.split('\n').filter(x=>x)); nest.appendChild(txt);
+               const btn = document.createElement('button'); btn.className = 'btn-add-nested'; btn.innerText = '+ Add Item'; btn.onclick = () => this.addItemToArray(path); nest.appendChild(btn);
            }
         } else {
            Object.keys(value).forEach(k => { if(!k.startsWith('@')) nest.appendChild(this.createField(k, value[k], [...path, k])); });
+
+           const valueType = Array.isArray(value['@type']) ? value['@type'][0] : value['@type'];
+           const available = valueType && SCHEMA_LIB[valueType] ? SCHEMA_LIB[valueType].fields || [] : [];
+           const existing = new Set(Object.keys(value).filter(k => !k.startsWith('@')));
+           const missing = available.filter(f => !existing.has(f));
+
+           if (missing.length > 0) {
+              const controls = document.createElement('div'); controls.className = 'nested-add-row';
+              const select = document.createElement('select'); select.className = 'schema-input';
+              missing.forEach(f => { const opt = document.createElement('option'); opt.value = f; opt.innerText = f; select.appendChild(opt); });
+              const btn = document.createElement('button'); btn.className = 'btn-add-nested'; btn.innerText = '+ Add Field';
+              btn.onclick = () => this.addFieldToObject(path, select.value);
+              controls.appendChild(select); controls.appendChild(btn);
+              nest.appendChild(controls);
+           }
         }
         row.appendChild(nest); return row;
     }
@@ -573,7 +636,26 @@ class App {
   // --- DATA MODIFIERS ---
   modifyPath(path, val) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length-1; i++) { if(!ref[path[i]]) ref[path[i]]={}; ref=ref[path[i]]; } ref[path[path.length-1]] = val; this.updateState(s, 'visual'); }
   deletePath(path) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length-1; i++) ref=ref[path[i]]; const last = path[path.length-1]; if(Array.isArray(ref)) ref.splice(last, 1); else delete ref[last]; this.updateState(s, 'visual'); }
-  addItemToArray(path) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length; i++) ref=ref[path[i]]; if(Array.isArray(ref)) { const tmpl = ref.length > 0 ? JSON.parse(JSON.stringify(ref[0])) : {"@type":"Thing"}; const wipe = (o) => Object.keys(o).forEach(k=>{ if(typeof o[k]==='object') wipe(o[k]); else o[k]=""}); wipe(tmpl); ref.push(tmpl); } this.updateState(s, 'visual'); }
+  addItemToArray(path) {
+    let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length; i++) ref=ref[path[i]];
+    if(Array.isArray(ref)) {
+      const parentField = path[path.length-1];
+      const isPrimitiveArray = FIELD_TYPES[parentField] === 'array' || ref.every(v => typeof v !== 'object');
+      if (isPrimitiveArray) {
+        ref.push("");
+      } else {
+        const tmpl = ref.length > 0 ? JSON.parse(JSON.stringify(ref[0])) : this.createDefaultNestedItem(parentField);
+        const wipe = (o) => Object.keys(o).forEach(k=>{ if(typeof o[k]==='object') wipe(o[k]); else o[k]=""}); if(typeof tmpl === 'object') wipe(tmpl);
+        ref.push(tmpl);
+      }
+    }
+    this.updateState(s, 'visual');
+  }
+  addFieldToObject(path, field) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length; i++) ref=ref[path[i]]; if(ref && typeof ref === 'object' && !Array.isArray(ref)) { ref[field] = this.defaultValueForField(field); } this.updateState(s, 'visual'); }
+  createDefaultNestedItem(parentField) {
+    const defaultType = DEFAULT_NESTED_TYPES[parentField];
+    return defaultType ? { '@type': defaultType } : { '@type': 'Thing' };
+  }
 
   updateState(newSchema, source) {
     if (source === 'json') {
