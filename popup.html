@@ -45,6 +45,13 @@
         <span class="material-icons close-modal" style="cursor:pointer;">close</span>
       </div>
       <div class="modal-body no-pad">
+        <div class="type-search-row">
+          <div class="type-search">
+            <span class="material-icons">search</span>
+            <input id="schema-type-search" type="text" placeholder="Search or enter any schema type" list="schema-type-options" />
+          </div>
+          <button id="add-custom-type" class="btn-select">Add</button>
+        </div>
         <div id="schema-type-list" class="type-list">
             <!-- Populated dynamically by JS -->
         </div>
@@ -171,6 +178,9 @@
 
   <!-- TOAST NOTIFICATIONS -->
   <div id="toast-container"></div>
+
+  <!-- Global type suggestions -->
+  <datalist id="schema-type-options"></datalist>
 
   <!-- WINDOW RESIZE HANDLE -->
   <div id="popup-resize-handle" class="window-resize-handle" title="Drag to resize popup height"></div>

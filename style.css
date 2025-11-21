@@ -166,6 +166,9 @@ main {
 .card-title { font-size: 13px; font-weight: 700; color: var(--tandem-navy); display: flex; align-items: center; gap: 8px; }
 .card-actions { display: flex; gap: 4px; }
 .card-body { padding: 16px; background: #fafafa; }
+.type-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+.type-row .type-label { font-size: 11px; font-weight: 600; color: var(--text-light); text-transform: uppercase; letter-spacing: 0.5px; }
+.type-row .type-select { flex: 1; }
 .schema-card.collapsed .card-body { display: none; }
 
 /* FIELDS */
@@ -289,3 +292,8 @@ body.is-resizing {
 .info-value { font-size: 13px; font-weight: 700; color: var(--tandem-navy); word-break: break-all; }
 .copy-btn { border: 1px solid var(--border); background: white; border-radius: 6px; padding: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .copy-btn:hover { background: #eff6ff; border-color: var(--tandem-blue); }
+/* Schema type search */
+.type-search-row { display: flex; align-items: center; gap: 8px; padding: 12px 12px 4px; position: sticky; top: 0; background: white; z-index: 1; }
+.type-search { display: flex; align-items: center; gap: 6px; flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; background: #fff; }
+.type-search input { border: none; outline: none; flex: 1; font-size: 13px; }
+.type-search .material-icons { color: var(--text-light); font-size: 18px; }

@@ -46,6 +46,43 @@ const FIELD_TYPES = {
   "breadcrumb": "nested_object", "openingHoursSpecification": "nested_array"
 };
 
+// Registry containing the full schema.org type catalog and properties to surface
+// accurate field suggestions for any selected @type.
+class SchemaRegistry {
+  constructor() {
+    this.types = new Set(Object.keys(SCHEMA_LIB));
+    this.properties = {};
+    this.loaded = false;
+  }
+
+  async load() {
+    if (this.loaded) return;
+    try {
+      const res = await fetch(chrome.runtime.getURL('schema-index.json'));
+      if (res.ok) {
+        const data = await res.json();
+        (data.types || []).forEach((t) => this.types.add(t));
+        this.properties = data.properties || {};
+      }
+    } catch (error) {
+      console.warn('Unable to load schema index', error);
+    }
+    this.loaded = true;
+  }
+
+  getAllTypes() {
+    return Array.from(this.types).sort();
+  }
+
+  getFieldsForType(typeName) {
+    const normalized = Array.isArray(typeName) ? typeName[0] : typeName;
+    if (!normalized) return [];
+    const curated = SCHEMA_LIB[normalized]?.fields || [];
+    const fromRegistry = this.properties[normalized] || [];
+    return [...new Set([...(curated || []), ...(fromRegistry || [])])].sort();
+  }
+}
+
 // When creating new blocks or nested structures, default them to useful schema shapes
 const DEFAULT_NESTED_TYPES = {
   address: "PostalAddress",
@@ -161,11 +198,15 @@ class App {
       url: null,
       gtmId: null
     };
+    this.registry = new SchemaRegistry();
+    this.registryReady = this.registry.load();
     this.net = new NetworkClient();
   }
 
   async init() {
     try {
+      await this.registryReady;
+      this.renderTypeOptions();
       this.setupWindowResizeHandle();
       // 1. Load Settings
       const settings = await chrome.storage.sync.get(['geminiKey', 'modelName']);
@@ -513,22 +554,62 @@ class App {
     this.updateJsonValidity(jsonEditor.value);
   }
 
-  openAddModal() {
-    const list = document.getElementById('schema-type-list'); list.innerHTML = '';
-    Object.keys(SCHEMA_LIB).forEach(key => {
-      const item = document.createElement('div'); item.className = 'type-item';
-      item.innerHTML = `<span class="material-icons">${SCHEMA_LIB[key].icon}</span> ${key}`;
-      item.onclick = () => this.addBlock(key);
-      list.appendChild(item);
+  renderTypeOptions() {
+    const datalist = document.getElementById('schema-type-options');
+    if (!datalist) return;
+
+    datalist.innerHTML = '';
+    this.registry.getAllTypes().forEach((type) => {
+      const opt = document.createElement('option');
+      opt.value = type;
+      datalist.appendChild(opt);
     });
-    document.getElementById('add-block-modal').style.display = 'flex';
+  }
+
+  openAddModal() {
+    const modal = document.getElementById('add-block-modal');
+    const list = document.getElementById('schema-type-list');
+    const search = document.getElementById('schema-type-search');
+    const addCustom = document.getElementById('add-custom-type');
+
+    const renderList = () => {
+      const query = (search?.value || '').toLowerCase().trim();
+      const types = this.registry.getAllTypes().filter((t) => t.toLowerCase().includes(query));
+      list.innerHTML = '';
+      types.forEach((key) => {
+        const icon = SCHEMA_LIB[key]?.icon || 'schema';
+        const item = document.createElement('div'); item.className = 'type-item';
+        item.innerHTML = `<span class="material-icons">${icon}</span> ${key}`;
+        item.onclick = () => { this.addBlock(key); modal.style.display = 'none'; };
+        list.appendChild(item);
+      });
+    };
+
+    renderList();
+    if (search) {
+      search.oninput = renderList;
+      search.focus();
+    }
+    if (addCustom) {
+      addCustom.onclick = () => {
+        const customType = (search?.value || '').trim();
+        if (!customType) {
+          this.toast('Enter a schema type to add', 'error');
+          return;
+        }
+        this.addBlock(customType);
+        modal.style.display = 'none';
+      };
+    }
+    modal.style.display = 'flex';
   }
 
   addBlock(type) {
     const block = { "@type": type };
-    if(SCHEMA_LIB[type].fields) {
-      SCHEMA_LIB[type].fields.forEach(f => block[f] = this.defaultValueForField(f, type));
-    }
+    const curatedFields = SCHEMA_LIB[type]?.fields || [];
+    const discoveredFields = this.registry.getFieldsForType(type).slice(0, 10);
+    const fieldsToSeed = curatedFields.length ? curatedFields : discoveredFields;
+    fieldsToSeed.forEach((f) => block[f] = this.defaultValueForField(f, type));
 
     let current = this.state.schema;
     if(Object.keys(current).length === 0) current = { "@context": "https://schema.org", ...block };
@@ -537,6 +618,10 @@ class App {
     
     this.updateState(current);
     document.getElementById('add-block-modal').style.display = 'none';
+  }
+
+  getIconForType(type) {
+    return SCHEMA_LIB[type]?.icon || 'schema';
   }
 
   defaultValueForField(fieldName, parentType) {
@@ -618,16 +703,26 @@ class App {
   createCard(item, path) {
     const primaryType = Array.isArray(item['@type']) ? item['@type'][0] : item['@type'] || 'Thing';
     const displayType = Array.isArray(item['@type']) ? item['@type'].join(', ') : (item['@type'] || 'Thing');
-    const def = SCHEMA_LIB[primaryType] || { icon: 'code', fields: [] };
+    const def = SCHEMA_LIB[primaryType] || { icon: this.getIconForType(primaryType), fields: [] };
     const keys = new Set([...(def.fields || []), ...Object.keys(item).filter(k => !k.startsWith('@'))]);
 
     const card = document.createElement('div'); card.className = 'schema-card';
     card.innerHTML = `<div class="card-header"><div class="card-title"><span class="material-icons">${def.icon}</span> ${displayType}</div><div class="card-actions"><span class="material-icons delete-card" style="color:#ef4444; cursor:pointer;">delete</span><span class="material-icons expand-icon">expand_more</span></div></div><div class="card-body"></div>`;
-    
+
     card.querySelector('.card-header').onclick = (e) => { if(!e.target.closest('.delete-card')) card.classList.toggle('collapsed'); };
     card.querySelector('.delete-card').onclick = () => this.deletePath(path);
-    
+
     const body = card.querySelector('.card-body');
+    const typeRow = document.createElement('div');
+    typeRow.className = 'type-row';
+    typeRow.innerHTML = `<div class="type-label">Type</div>`;
+    const typeInput = document.createElement('input');
+    typeInput.className = 'schema-input type-select';
+    typeInput.setAttribute('list', 'schema-type-options');
+    typeInput.value = displayType;
+    typeInput.onchange = (e) => this.updateType(path, e.target.value);
+    typeRow.appendChild(typeInput);
+    body.appendChild(typeRow);
     keys.forEach(key => body.appendChild(this.createField(key, item[key], [...path, key])));
     return card;
   }
@@ -653,7 +748,8 @@ class App {
            Object.keys(value).forEach(k => { if(!k.startsWith('@')) nest.appendChild(this.createField(k, value[k], [...path, k])); });
 
            const valueType = Array.isArray(value['@type']) ? value['@type'][0] : value['@type'];
-           const available = valueType && SCHEMA_LIB[valueType] ? SCHEMA_LIB[valueType].fields || [] : [];
+           const parentType = this.getTypeForPath(path.slice(0, -1));
+           const available = this.registry.getFieldsForType(valueType || parentType);
            const existing = new Set(Object.keys(value).filter(k => !k.startsWith('@')));
            const missing = available.filter(f => !existing.has(f));
 
@@ -666,6 +762,13 @@ class App {
               controls.appendChild(select); controls.appendChild(btn);
               nest.appendChild(controls);
            }
+
+           const customControls = document.createElement('div'); customControls.className = 'nested-add-row';
+           const customInput = document.createElement('input'); customInput.className = 'schema-input'; customInput.placeholder = 'Custom property name';
+           const customBtn = document.createElement('button'); customBtn.className = 'btn-add-nested'; customBtn.innerText = '+ Add Field';
+           customBtn.onclick = () => { const name = customInput.value.trim(); if (name) { this.addFieldToObject(path, name); customInput.value = ''; } };
+           customControls.appendChild(customInput); customControls.appendChild(customBtn);
+           nest.appendChild(customControls);
         }
         row.appendChild(nest); return row;
     }
@@ -680,6 +783,7 @@ class App {
   // --- DATA MODIFIERS ---
   modifyPath(path, val) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length-1; i++) { if(!ref[path[i]]) ref[path[i]]={}; ref=ref[path[i]]; } ref[path[path.length-1]] = val; this.updateState(s, 'visual'); }
   deletePath(path) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length-1; i++) ref=ref[path[i]]; const last = path[path.length-1]; if(Array.isArray(ref)) ref.splice(last, 1); else delete ref[last]; this.updateState(s, 'visual'); }
+  updateType(path, typeName) { const next = JSON.parse(JSON.stringify(this.state.schema)); let ref = next; for (let i = 0; i < path.length; i++) { if (!ref[path[i]]) ref[path[i]] = {}; ref = ref[path[i]]; } if (ref && typeof ref === 'object') { ref['@type'] = typeName || 'Thing'; this.updateState(next, 'visual'); } }
   addItemToArray(path) {
     let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length; i++) ref=ref[path[i]];
     if(Array.isArray(ref)) {
