@@ -46,6 +46,10 @@ const FIELD_TYPES = {
   "breadcrumb": "nested_object", "openingHoursSpecification": "nested_array"
 };
 
+const REMOTE_SCHEMA_INDEX_URL = 'https://raw.githubusercontent.com/Tandem-Interactive/Tandem-Nexus-Schema/main/schema-index.json';
+const SCHEMA_INDEX_CACHE_KEY = 'schemaIndexCache';
+const SCHEMA_INDEX_MAX_AGE = 24 * 60 * 60 * 1000; // 24 hours
+
 // Registry containing the full schema.org type catalog and properties to surface
 // accurate field suggestions for any selected @type.
 class SchemaRegistry {
@@ -58,16 +62,51 @@ class SchemaRegistry {
   async load() {
     if (this.loaded) return;
     try {
-      const res = await fetch(chrome.runtime.getURL('schema-index.json'));
-      if (res.ok) {
-        const data = await res.json();
-        (data.types || []).forEach((t) => this.types.add(t));
-        this.properties = data.properties || {};
+      const cached = await chrome.storage.local.get([SCHEMA_INDEX_CACHE_KEY]);
+      const entry = cached[SCHEMA_INDEX_CACHE_KEY];
+      const isFresh = entry && entry.cachedAt && (Date.now() - entry.cachedAt) < SCHEMA_INDEX_MAX_AGE;
+
+      if (isFresh && entry.data) {
+        this.applyIndex(entry.data);
+        this.loaded = true;
+        return;
       }
     } catch (error) {
-      console.warn('Unable to load schema index', error);
+      console.warn('Schema index cache read failed', error);
+    }
+
+    const sources = [() => this.fetchRemoteIndex(), () => this.fetchLocalIndex()];
+    for (const loadSource of sources) {
+      try {
+        const data = await loadSource();
+        if (data) {
+          this.applyIndex(data);
+          await chrome.storage.local.set({ [SCHEMA_INDEX_CACHE_KEY]: { data, cachedAt: Date.now() } });
+          break;
+        }
+      } catch (error) {
+        console.warn('Schema index load failed', error);
+      }
     }
     this.loaded = true;
+  }
+
+  async fetchRemoteIndex() {
+    const response = await fetch(REMOTE_SCHEMA_INDEX_URL, { cache: 'no-cache' });
+    if (!response.ok) return null;
+    return response.json();
+  }
+
+  async fetchLocalIndex() {
+    const res = await fetch(chrome.runtime.getURL('schema-index.json'));
+    if (!res.ok) return null;
+    return res.json();
+  }
+
+  applyIndex(data) {
+    if (!data || typeof data !== 'object') return;
+    (data.types || []).forEach((t) => this.types.add(t));
+    this.properties = data.properties || {};
   }
 
   getAllTypes() {
@@ -444,6 +483,7 @@ class App {
     document.getElementById('login-btn').onclick = () => this.login();
     document.getElementById('ai-scan-btn').onclick = () => this.runAI();
     document.getElementById('validate-btn').onclick = () => this.validateJson();
+    document.getElementById('preview-btn').onclick = () => this.openPreview();
     document.getElementById('publish-btn').onclick = () => this.publish();
     document.getElementById('undo-btn').onclick = () => this.scanPage();
 
@@ -549,6 +589,70 @@ class App {
       };
     }
     modal.style.display = 'flex';
+  }
+
+  openPreview() {
+    const modal = document.getElementById('preview-modal');
+    if (!modal) return;
+    this.renderPreviewCard();
+    modal.style.display = 'flex';
+  }
+
+  renderPreviewCard() {
+    const container = document.getElementById('preview-content');
+    if (!container) return;
+
+    const primary = this.getPrimarySchemaNode();
+    if (!primary) {
+      container.innerHTML = '<p class="muted">Generate or edit a schema to see a live preview.</p>';
+      return;
+    }
+
+    const title = this.escapeHtml(primary.name || primary.headline || 'Untitled result');
+    const description = this.escapeHtml(primary.description || primary.reviewBody || primary.text || 'Add description to improve visibility.');
+    const url = this.escapeHtml(primary.url || this.state.url || 'https://example.com');
+
+    const ratingBlock = this.renderRating(primary.aggregateRating || primary.reviewRating);
+
+    container.innerHTML = `
+      <div class="preview-card">
+        <div class="preview-url">${url}</div>
+        <h4 class="preview-title">${title}</h4>
+        ${ratingBlock}
+        <p class="preview-desc">${description}</p>
+      </div>
+    `;
+  }
+
+  renderRating(rating) {
+    if (!rating || typeof rating !== 'object') return '';
+    const value = Number(rating.ratingValue);
+    if (!Number.isFinite(value)) return '';
+
+    const count = rating.ratingCount || rating.reviewCount;
+    const clamped = Math.max(1, Math.min(5, value));
+    const fullStars = '★'.repeat(Math.round(clamped));
+    const emptyStars = '☆'.repeat(5 - Math.round(clamped));
+
+    const details = [value.toFixed(1), count ? `${count} reviews` : null].filter(Boolean).join(' · ');
+    return `<div class="rating-row"><span class="rating-stars" aria-hidden="true">${fullStars}${emptyStars}</span><span class="muted">${this.escapeHtml(details)}</span></div>`;
+  }
+
+  getPrimarySchemaNode() {
+    const aggregate = this.state.schema || {};
+    const pool = Array.isArray(aggregate['@graph']) ? aggregate['@graph'] : [aggregate];
+    const candidate = pool.find((item) => item && typeof item === 'object' && Object.keys(item).length > 0);
+    return candidate || null;
+  }
+
+  escapeHtml(value) {
+    if (value === undefined || value === null) return '';
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   addBlock(type) {
@@ -747,11 +851,11 @@ class App {
     if (!path.length) {
       const baseContext = this.state.schema['@context'] || 'https://schema.org';
       const rootValue = typeof val === 'object' && val !== null ? { '@context': baseContext, ...val } : val;
-      this.updateState(rootValue, 'visual');
+      this.updateState(rootValue, 'visual-value');
       return;
     }
 
-    let s = JSON.parse(JSON.stringify(this.state.schema));
+    const s = structuredClone(this.state.schema || {});
     let ref = s;
     for (let i = 0; i < path.length - 1; i++) {
       const key = path[i];
@@ -761,12 +865,12 @@ class App {
       ref = ref[key];
     }
     ref[path[path.length - 1]] = val;
-    this.updateState(s, 'visual');
+    this.updateState(s, 'visual-value');
   }
-  deletePath(path) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length-1; i++) ref=ref[path[i]]; const last = path[path.length-1]; if(Array.isArray(ref)) ref.splice(last, 1); else delete ref[last]; this.updateState(s, 'visual'); }
-  updateType(path, typeName) { const next = JSON.parse(JSON.stringify(this.state.schema)); let ref = next; for (let i = 0; i < path.length; i++) { if (!ref[path[i]]) ref[path[i]] = {}; ref = ref[path[i]]; } if (ref && typeof ref === 'object') { ref['@type'] = typeName || 'Thing'; this.updateState(next, 'visual'); } }
+  deletePath(path) { const s = structuredClone(this.state.schema || {}); let ref = s; for(let i=0; i<path.length-1; i++) ref=ref[path[i]]; const last = path[path.length-1]; if(Array.isArray(ref)) ref.splice(last, 1); else delete ref[last]; this.updateState(s, 'visual'); }
+  updateType(path, typeName) { const next = structuredClone(this.state.schema || {}); let ref = next; for (let i = 0; i < path.length; i++) { if (!ref[path[i]]) ref[path[i]] = {}; ref = ref[path[i]]; } if (ref && typeof ref === 'object') { ref['@type'] = typeName || 'Thing'; this.updateState(next, 'visual'); } }
   addItemToArray(path) {
-    let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length; i++) ref=ref[path[i]];
+    const s = structuredClone(this.state.schema || {}); let ref = s; for(let i=0; i<path.length; i++) ref=ref[path[i]];
     if(Array.isArray(ref)) {
       const parentField = path[path.length-1];
       const parentType = this.getTypeForPath(path.slice(0, -1), s);
@@ -781,13 +885,15 @@ class App {
     }
     this.updateState(s, 'visual');
   }
-  addFieldToObject(path, field) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length; i++) ref=ref[path[i]]; if(ref && typeof ref === 'object' && !Array.isArray(ref)) { const parentType = this.getTypeForPath(path, s); ref[field] = this.defaultValueForField(field, parentType); } this.updateState(s, 'visual'); }
+  addFieldToObject(path, field) { const s = structuredClone(this.state.schema || {}); let ref = s; for(let i=0; i<path.length; i++) ref=ref[path[i]]; if(ref && typeof ref === 'object' && !Array.isArray(ref)) { const parentType = this.getTypeForPath(path, s); ref[field] = this.defaultValueForField(field, parentType); } this.updateState(s, 'visual'); }
   createDefaultNestedItem(parentField, parentType) {
     const bestType = this.resolveNestedType(parentField, parentType);
     return bestType ? { '@type': bestType } : { '@type': 'Thing' };
   }
 
   updateState(newSchema, source) {
+    const shouldRenderVisual = source !== 'visual-value';
+
     if (source === 'json') {
       const list = this.state.schemaList.length ? [...this.state.schemaList] : [];
       const index = this.state.currentSchemaIndex || 0;
@@ -808,9 +914,14 @@ class App {
 
     this.state.schema = aggregate;
 
-    // Always re-render the visual view so UI updates reflect schema mutations
-    // triggered from both the JSON editor and the visual builder.
-    this.renderVisual(aggregate);
+    if (shouldRenderVisual) {
+      this.renderVisual(aggregate);
+    }
+
+    const previewModal = document.getElementById('preview-modal');
+    if (previewModal && previewModal.style.display === 'flex') {
+      this.renderPreviewCard();
+    }
 
     const currentSchema = this.state.schemaList[this.state.currentSchemaIndex] || {};
     const jsonText = JSON.stringify(currentSchema, null, 2);
@@ -1161,12 +1272,52 @@ class App {
       issues.push('@graph must be an array.');
     }
 
+    const propertyIssues = this.validateSchemaProperties(parsed);
+    if (propertyIssues.length) {
+      issues.push(...propertyIssues);
+    }
+
     if (issues.length === 0) {
       this.toast('JSON-LD looks valid');
       this.updateState(parsed, 'json');
     } else {
       this.toast(issues.join(' '), 'error');
     }
+  }
+
+  validateSchemaProperties(schema) {
+    const issues = [];
+    const visited = new Set();
+
+    const walk = (node, path = 'root') => {
+      if (!node || typeof node !== 'object') return;
+      if (visited.has(node)) return;
+      visited.add(node);
+
+      if (Array.isArray(node)) {
+        node.forEach((entry, idx) => walk(entry, `${path}[${idx}]`));
+        return;
+      }
+
+      const type = Array.isArray(node['@type']) ? node['@type'][0] : node['@type'];
+      const allowedProps = type ? new Set(this.registry.getFieldsForType(type)) : null;
+
+      Object.entries(node).forEach(([key, value]) => {
+        if (key.startsWith('@')) return;
+        if (allowedProps && !allowedProps.has(key)) {
+          issues.push(`Property "${key}" is not defined for ${type} at ${path}.`);
+        }
+        walk(value, `${path}.${key}`);
+      });
+    };
+
+    if (schema['@graph'] && Array.isArray(schema['@graph'])) {
+      schema['@graph'].forEach((entry, idx) => walk(entry, `@graph[${idx}]`));
+    } else {
+      walk(schema);
+    }
+
+    return issues;
   }
 
   async scanActivePage() {
