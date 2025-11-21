@@ -42,7 +42,8 @@ const FIELD_TYPES = {
   "address": "nested_object", "geo": "nested_object", "acceptedAnswer": "nested_object",
   "potentialAction": "nested_object", "publisher": "nested_object", "location": "nested_object",
   "worksFor": "nested_object", "reviewRating": "nested_object", "itemReviewed": "nested_object",
-  "target": "nested_object"
+  "target": "nested_object", "author": "nested_object", "aggregateRating": "nested_object",
+  "breadcrumb": "nested_object", "openingHoursSpecification": "nested_array"
 };
 
 // When creating new blocks or nested structures, default them to useful schema shapes
@@ -59,7 +60,31 @@ const DEFAULT_NESTED_TYPES = {
   offers: "Offer",
   mainEntity: "Thing",
   itemListElement: "ListItem",
-  target: "EntryPoint"
+  target: "EntryPoint",
+  aggregateRating: "AggregateRating",
+  author: "Person",
+  breadcrumb: "BreadcrumbList",
+  openingHoursSpecification: "OpeningHoursSpecification"
+};
+
+// Provide best-practice nested defaults for specific schema parents so we always seed
+// deeper structures with valid shapes for their container type.
+const BEST_NESTED_TYPES = {
+  FAQPage: { mainEntity: "Question" },
+  Question: { acceptedAnswer: "Answer" },
+  BreadcrumbList: { itemListElement: "ListItem" },
+  Product: { offers: "Offer", aggregateRating: "AggregateRating" },
+  Event: { location: "Place", offers: "Offer" },
+  WebSite: { potentialAction: "SearchAction", publisher: "Organization" },
+  WebPage: { breadcrumb: "BreadcrumbList", publisher: "Organization" },
+  Article: { author: "Person", publisher: "Organization" },
+  Review: { author: "Person", reviewRating: "Rating", itemReviewed: "Thing" },
+  AggregateOffer: { offers: "Offer" },
+  LocalBusiness: { address: "PostalAddress", geo: "GeoCoordinates", openingHoursSpecification: "OpeningHoursSpecification" },
+  ProfessionalService: { address: "PostalAddress", openingHoursSpecification: "OpeningHoursSpecification" },
+  Organization: { address: "PostalAddress" },
+  Person: { worksFor: "Organization" },
+  SearchAction: { target: "EntryPoint" }
 };
 
 // MANIFEST TEMPLATE (For Wizard)
@@ -502,7 +527,7 @@ class App {
   addBlock(type) {
     const block = { "@type": type };
     if(SCHEMA_LIB[type].fields) {
-      SCHEMA_LIB[type].fields.forEach(f => block[f] = this.defaultValueForField(f));
+      SCHEMA_LIB[type].fields.forEach(f => block[f] = this.defaultValueForField(f, type));
     }
 
     let current = this.state.schema;
@@ -514,18 +539,37 @@ class App {
     document.getElementById('add-block-modal').style.display = 'none';
   }
 
-  defaultValueForField(fieldName) {
+  defaultValueForField(fieldName, parentType) {
     const type = FIELD_TYPES[fieldName];
+    const bestType = this.resolveNestedType(fieldName, parentType);
     if (type === 'nested_object') {
-      const defaultType = DEFAULT_NESTED_TYPES[fieldName];
-      return defaultType ? { '@type': defaultType } : {};
+      return bestType ? { '@type': bestType } : {};
     }
     if (type === 'nested_array') {
-      const defaultType = DEFAULT_NESTED_TYPES[fieldName];
-      return defaultType ? [{ '@type': defaultType }] : [];
+      return bestType ? [{ '@type': bestType }] : [];
     }
     if (type === 'array') return [];
     return "";
+  }
+
+  resolveNestedType(fieldName, parentType) {
+    const normalizedParent = Array.isArray(parentType) ? parentType[0] : parentType;
+    if (normalizedParent && BEST_NESTED_TYPES[normalizedParent] && BEST_NESTED_TYPES[normalizedParent][fieldName]) {
+      return BEST_NESTED_TYPES[normalizedParent][fieldName];
+    }
+    return DEFAULT_NESTED_TYPES[fieldName];
+  }
+
+  getTypeForPath(path, schemaOverride) {
+    const source = schemaOverride || this.state.schema;
+    let ref = source;
+    for (let i = 0; i < path.length; i++) {
+      if (!ref || typeof ref !== 'object') return null;
+      ref = ref[path[i]];
+    }
+    if (!ref || typeof ref !== 'object') return null;
+    const type = ref['@type'];
+    return Array.isArray(type) ? type[0] : (type || null);
   }
 
   // --- VISUAL RENDERER (FIXED DATA FLOW) ---
@@ -640,21 +684,22 @@ class App {
     let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length; i++) ref=ref[path[i]];
     if(Array.isArray(ref)) {
       const parentField = path[path.length-1];
+      const parentType = this.getTypeForPath(path.slice(0, -1), s);
       const isPrimitiveArray = FIELD_TYPES[parentField] === 'array' || ref.every(v => typeof v !== 'object');
       if (isPrimitiveArray) {
         ref.push("");
       } else {
-        const tmpl = ref.length > 0 ? JSON.parse(JSON.stringify(ref[0])) : this.createDefaultNestedItem(parentField);
+        const tmpl = ref.length > 0 ? JSON.parse(JSON.stringify(ref[0])) : this.createDefaultNestedItem(parentField, parentType);
         const wipe = (o) => Object.keys(o).forEach(k=>{ if(typeof o[k]==='object') wipe(o[k]); else o[k]=""}); if(typeof tmpl === 'object') wipe(tmpl);
         ref.push(tmpl);
       }
     }
     this.updateState(s, 'visual');
   }
-  addFieldToObject(path, field) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length; i++) ref=ref[path[i]]; if(ref && typeof ref === 'object' && !Array.isArray(ref)) { ref[field] = this.defaultValueForField(field); } this.updateState(s, 'visual'); }
-  createDefaultNestedItem(parentField) {
-    const defaultType = DEFAULT_NESTED_TYPES[parentField];
-    return defaultType ? { '@type': defaultType } : { '@type': 'Thing' };
+  addFieldToObject(path, field) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length; i++) ref=ref[path[i]]; if(ref && typeof ref === 'object' && !Array.isArray(ref)) { const parentType = this.getTypeForPath(path, s); ref[field] = this.defaultValueForField(field, parentType); } this.updateState(s, 'visual'); }
+  createDefaultNestedItem(parentField, parentType) {
+    const bestType = this.resolveNestedType(parentField, parentType);
+    return bestType ? { '@type': bestType } : { '@type': 'Thing' };
   }
 
   updateState(newSchema, source) {
