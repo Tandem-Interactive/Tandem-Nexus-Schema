@@ -124,6 +124,7 @@ class App {
 
   async init() {
     try {
+      this.setupWindowResizeHandle();
       // 1. Load Settings
       const settings = await chrome.storage.sync.get(['geminiKey', 'modelName']);
       if(settings.geminiKey) this.state.geminiKey = settings.geminiKey;
@@ -137,6 +138,44 @@ class App {
         this.initApp();
       }
     } catch (e) { console.error("Init Failed", e); }
+  }
+
+  setupWindowResizeHandle() {
+    const handle = document.getElementById('popup-resize-handle');
+    if (!handle || typeof window.resizeTo !== 'function') return;
+
+    const MIN_HEIGHT = 720;
+    const MAX_HEIGHT = 1200;
+    let startY = 0;
+    let startHeight = window.outerHeight || document.documentElement.clientHeight;
+
+    const stopDrag = () => {
+      document.body.classList.remove('is-resizing');
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', stopDrag);
+      window.removeEventListener('mouseleave', stopDrag);
+      window.removeEventListener('blur', stopDrag);
+    };
+
+    const onMouseMove = (event) => {
+      const delta = event.screenY - startY;
+      const targetHeight = Math.min(
+        MAX_HEIGHT,
+        Math.max(MIN_HEIGHT, startHeight + delta)
+      );
+      window.resizeTo(window.outerWidth, targetHeight);
+    };
+
+    handle.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      startY = event.screenY;
+      startHeight = window.outerHeight || document.documentElement.clientHeight;
+      document.body.classList.add('is-resizing');
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', stopDrag);
+      window.addEventListener('mouseleave', stopDrag);
+      window.addEventListener('blur', stopDrag);
+    });
   }
 
   // --- WIZARD ---
