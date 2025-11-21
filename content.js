@@ -121,7 +121,7 @@ if (!window.hasTandemListener) {
       .map((h) => `${h.tagName}: ${h.innerText}`)
       .join('\n');
 
-    const bodyText = document.body.innerText.substring(0, 2000).replace(/\s+/g, ' ');
+    const bodyText = document.body.innerText.substring(0, 50000).replace(/\s+/g, ' ');
 
     return `
       URL: ${window.location.href}
