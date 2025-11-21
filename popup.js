@@ -42,7 +42,86 @@ const FIELD_TYPES = {
   "address": "nested_object", "geo": "nested_object", "acceptedAnswer": "nested_object",
   "potentialAction": "nested_object", "publisher": "nested_object", "location": "nested_object",
   "worksFor": "nested_object", "reviewRating": "nested_object", "itemReviewed": "nested_object",
-  "target": "nested_object"
+  "target": "nested_object", "author": "nested_object", "aggregateRating": "nested_object",
+  "breadcrumb": "nested_object", "openingHoursSpecification": "nested_array"
+};
+
+// Registry containing the full schema.org type catalog and properties to surface
+// accurate field suggestions for any selected @type.
+class SchemaRegistry {
+  constructor() {
+    this.types = new Set(Object.keys(SCHEMA_LIB));
+    this.properties = {};
+    this.loaded = false;
+  }
+
+  async load() {
+    if (this.loaded) return;
+    try {
+      const res = await fetch(chrome.runtime.getURL('schema-index.json'));
+      if (res.ok) {
+        const data = await res.json();
+        (data.types || []).forEach((t) => this.types.add(t));
+        this.properties = data.properties || {};
+      }
+    } catch (error) {
+      console.warn('Unable to load schema index', error);
+    }
+    this.loaded = true;
+  }
+
+  getAllTypes() {
+    return Array.from(this.types).sort();
+  }
+
+  getFieldsForType(typeName) {
+    const normalized = Array.isArray(typeName) ? typeName[0] : typeName;
+    if (!normalized) return [];
+    const curated = SCHEMA_LIB[normalized]?.fields || [];
+    const fromRegistry = this.properties[normalized] || [];
+    return [...new Set([...(curated || []), ...(fromRegistry || [])])].sort();
+  }
+}
+
+// When creating new blocks or nested structures, default them to useful schema shapes
+const DEFAULT_NESTED_TYPES = {
+  address: "PostalAddress",
+  geo: "GeoCoordinates",
+  acceptedAnswer: "Answer",
+  potentialAction: "SearchAction",
+  publisher: "Organization",
+  location: "Place",
+  worksFor: "Organization",
+  reviewRating: "Rating",
+  itemReviewed: "Thing",
+  offers: "Offer",
+  mainEntity: "Thing",
+  itemListElement: "ListItem",
+  target: "EntryPoint",
+  aggregateRating: "AggregateRating",
+  author: "Person",
+  breadcrumb: "BreadcrumbList",
+  openingHoursSpecification: "OpeningHoursSpecification"
+};
+
+// Provide best-practice nested defaults for specific schema parents so we always seed
+// deeper structures with valid shapes for their container type.
+const BEST_NESTED_TYPES = {
+  FAQPage: { mainEntity: "Question" },
+  Question: { acceptedAnswer: "Answer" },
+  BreadcrumbList: { itemListElement: "ListItem" },
+  Product: { offers: "Offer", aggregateRating: "AggregateRating" },
+  Event: { location: "Place", offers: "Offer" },
+  WebSite: { potentialAction: "SearchAction", publisher: "Organization" },
+  WebPage: { breadcrumb: "BreadcrumbList", publisher: "Organization" },
+  Article: { author: "Person", publisher: "Organization" },
+  Review: { author: "Person", reviewRating: "Rating", itemReviewed: "Thing" },
+  AggregateOffer: { offers: "Offer" },
+  LocalBusiness: { address: "PostalAddress", geo: "GeoCoordinates", openingHoursSpecification: "OpeningHoursSpecification" },
+  ProfessionalService: { address: "PostalAddress", openingHoursSpecification: "OpeningHoursSpecification" },
+  Organization: { address: "PostalAddress" },
+  Person: { worksFor: "Organization" },
+  SearchAction: { target: "EntryPoint" }
 };
 
 // MANIFEST TEMPLATE (For Wizard)
@@ -119,11 +198,15 @@ class App {
       url: null,
       gtmId: null
     };
+    this.registry = new SchemaRegistry();
+    this.registryReady = this.registry.load();
     this.net = new NetworkClient();
   }
 
   async init() {
     try {
+      await this.registryReady;
+      this.renderTypeOptions();
       this.setupWindowResizeHandle();
       // 1. Load Settings
       const settings = await chrome.storage.sync.get(['geminiKey', 'modelName']);
@@ -142,12 +225,26 @@ class App {
 
   setupWindowResizeHandle() {
     const handle = document.getElementById('popup-resize-handle');
-    if (!handle || typeof window.resizeTo !== 'function') return;
+    if (!handle) return;
 
     const MIN_HEIGHT = 720;
     const MAX_HEIGHT = 1200;
     let startY = 0;
     let startHeight = window.outerHeight || document.documentElement.clientHeight;
+
+    const applyHeight = (height) => {
+      if (chrome?.windows?.update) {
+        chrome.windows.getCurrent((win) => {
+          if (chrome.runtime.lastError || !win?.id) return;
+          chrome.windows.update(win.id, { height });
+        });
+      }
+      if (typeof window.resizeTo === 'function') {
+        window.resizeTo(window.outerWidth, height);
+      }
+      document.documentElement.style.height = `${height}px`;
+      document.body.style.height = `${height}px`;
+    };
 
     const stopDrag = () => {
       document.body.classList.remove('is-resizing');
@@ -163,7 +260,7 @@ class App {
         MAX_HEIGHT,
         Math.max(MIN_HEIGHT, startHeight + delta)
       );
-      window.resizeTo(window.outerWidth, targetHeight);
+      applyHeight(targetHeight);
     };
 
     handle.addEventListener('mousedown', (event) => {
@@ -457,21 +554,63 @@ class App {
     this.updateJsonValidity(jsonEditor.value);
   }
 
-  openAddModal() {
-    const list = document.getElementById('schema-type-list'); list.innerHTML = '';
-    Object.keys(SCHEMA_LIB).forEach(key => {
-      const item = document.createElement('div'); item.className = 'type-item';
-      item.innerHTML = `<span class="material-icons">${SCHEMA_LIB[key].icon}</span> ${key}`;
-      item.onclick = () => this.addBlock(key);
-      list.appendChild(item);
+  renderTypeOptions() {
+    const datalist = document.getElementById('schema-type-options');
+    if (!datalist) return;
+
+    datalist.innerHTML = '';
+    this.registry.getAllTypes().forEach((type) => {
+      const opt = document.createElement('option');
+      opt.value = type;
+      datalist.appendChild(opt);
     });
-    document.getElementById('add-block-modal').style.display = 'flex';
+  }
+
+  openAddModal() {
+    const modal = document.getElementById('add-block-modal');
+    const list = document.getElementById('schema-type-list');
+    const search = document.getElementById('schema-type-search');
+    const addCustom = document.getElementById('add-custom-type');
+
+    const renderList = () => {
+      const query = (search?.value || '').toLowerCase().trim();
+      const types = this.registry.getAllTypes().filter((t) => t.toLowerCase().includes(query));
+      list.innerHTML = '';
+      types.forEach((key) => {
+        const icon = SCHEMA_LIB[key]?.icon || 'schema';
+        const item = document.createElement('div'); item.className = 'type-item';
+        item.innerHTML = `<span class="material-icons">${icon}</span> ${key}`;
+        item.onclick = () => { this.addBlock(key); modal.style.display = 'none'; };
+        list.appendChild(item);
+      });
+    };
+
+    renderList();
+    if (search) {
+      search.oninput = renderList;
+      search.focus();
+    }
+    if (addCustom) {
+      addCustom.onclick = () => {
+        const customType = (search?.value || '').trim();
+        if (!customType) {
+          this.toast('Enter a schema type to add', 'error');
+          return;
+        }
+        this.addBlock(customType);
+        modal.style.display = 'none';
+      };
+    }
+    modal.style.display = 'flex';
   }
 
   addBlock(type) {
     const block = { "@type": type };
-    if(SCHEMA_LIB[type].fields) SCHEMA_LIB[type].fields.forEach(f => block[f] = "");
-    
+    const curatedFields = SCHEMA_LIB[type]?.fields || [];
+    const discoveredFields = this.registry.getFieldsForType(type).slice(0, 10);
+    const fieldsToSeed = curatedFields.length ? curatedFields : discoveredFields;
+    fieldsToSeed.forEach((f) => block[f] = this.defaultValueForField(f, type));
+
     let current = this.state.schema;
     if(Object.keys(current).length === 0) current = { "@context": "https://schema.org", ...block };
     else if(current['@graph']) current['@graph'].push(block);
@@ -479,6 +618,53 @@ class App {
     
     this.updateState(current);
     document.getElementById('add-block-modal').style.display = 'none';
+  }
+
+  getIconForType(type) {
+    return SCHEMA_LIB[type]?.icon || 'schema';
+  }
+
+  defaultValueForField(fieldName, parentType) {
+    const type = FIELD_TYPES[fieldName];
+    const bestType = this.resolveNestedType(fieldName, parentType);
+    if (type === 'nested_object') {
+      return bestType ? { '@type': bestType } : {};
+    }
+    if (type === 'nested_array') {
+      return bestType ? [{ '@type': bestType }] : [];
+    }
+    if (type === 'array') return [];
+    return "";
+  }
+
+  resolveNestedType(fieldName, parentType) {
+    const normalizedParent = Array.isArray(parentType) ? parentType[0] : parentType;
+    if (normalizedParent && BEST_NESTED_TYPES[normalizedParent] && BEST_NESTED_TYPES[normalizedParent][fieldName]) {
+      return BEST_NESTED_TYPES[normalizedParent][fieldName];
+    }
+    return DEFAULT_NESTED_TYPES[fieldName];
+  }
+
+  getTypeForPath(path, schemaOverride) {
+    const source = schemaOverride || this.state.schema;
+    let ref = source;
+    for (let i = 0; i < path.length; i++) {
+      if (!ref || typeof ref !== 'object') return null;
+      ref = ref[path[i]];
+    }
+    if (!ref || typeof ref !== 'object') return null;
+    const type = ref['@type'];
+    return Array.isArray(type) ? type[0] : (type || null);
+  }
+
+  getValueAtPath(path, source) {
+    const target = source || this.state.schema;
+    let ref = target;
+    for (let i = 0; i < path.length; i++) {
+      if (ref === undefined || ref === null) return null;
+      ref = ref[path[i]];
+    }
+    return ref === undefined ? null : ref;
   }
 
   // --- VISUAL RENDERER (FIXED DATA FLOW) ---
@@ -527,16 +713,31 @@ class App {
   createCard(item, path) {
     const primaryType = Array.isArray(item['@type']) ? item['@type'][0] : item['@type'] || 'Thing';
     const displayType = Array.isArray(item['@type']) ? item['@type'].join(', ') : (item['@type'] || 'Thing');
-    const def = SCHEMA_LIB[primaryType] || { icon: 'code', fields: [] };
+    const def = SCHEMA_LIB[primaryType] || { icon: this.getIconForType(primaryType), fields: [] };
     const keys = new Set([...(def.fields || []), ...Object.keys(item).filter(k => !k.startsWith('@'))]);
 
     const card = document.createElement('div'); card.className = 'schema-card';
-    card.innerHTML = `<div class="card-header"><div class="card-title"><span class="material-icons">${def.icon}</span> ${displayType}</div><div class="card-actions"><span class="material-icons delete-card" style="color:#ef4444; cursor:pointer;">delete</span><span class="material-icons expand-icon">expand_more</span></div></div><div class="card-body"></div>`;
-    
+    card.innerHTML = `<div class="card-header"><div class="card-title"><span class="material-icons">${def.icon}</span> ${displayType}</div><div class="card-actions"><button class="icon-btn ai-generate-card" title="AI generate this schema"><span class="material-icons">auto_awesome</span></button><span class="material-icons delete-card" style="color:#ef4444; cursor:pointer;">delete</span><span class="material-icons expand-icon">expand_more</span></div></div><div class="card-body"></div>`;
+
     card.querySelector('.card-header').onclick = (e) => { if(!e.target.closest('.delete-card')) card.classList.toggle('collapsed'); };
+    const aiBtn = card.querySelector('.ai-generate-card');
+    aiBtn.onclick = (e) => {
+      e.stopPropagation();
+      this.runAIForCard(path, primaryType, aiBtn);
+    };
     card.querySelector('.delete-card').onclick = () => this.deletePath(path);
-    
+
     const body = card.querySelector('.card-body');
+    const typeRow = document.createElement('div');
+    typeRow.className = 'type-row';
+    typeRow.innerHTML = `<div class="type-label">Type</div>`;
+    const typeInput = document.createElement('input');
+    typeInput.className = 'schema-input type-select';
+    typeInput.setAttribute('list', 'schema-type-options');
+    typeInput.value = displayType;
+    typeInput.onchange = (e) => this.updateType(path, e.target.value);
+    typeRow.appendChild(typeInput);
+    body.appendChild(typeRow);
     keys.forEach(key => body.appendChild(this.createField(key, item[key], [...path, key])));
     return card;
   }
@@ -554,11 +755,35 @@ class App {
                value.forEach((v, i) => nest.appendChild(this.createCard(v, [...path, i])));
                const btn = document.createElement('button'); btn.className = 'btn-add-nested'; btn.innerText = '+ Add Item'; btn.onclick = () => this.addItemToArray(path); nest.appendChild(btn);
            } else {
-               const txt = document.createElement('textarea'); txt.className = 'schema-input'; txt.value = value.join('\n'); 
+               const txt = document.createElement('textarea'); txt.className = 'schema-input'; txt.value = value.join('\n');
                txt.onchange = (e) => this.modifyPath(path, e.target.value.split('\n').filter(x=>x)); nest.appendChild(txt);
+               const btn = document.createElement('button'); btn.className = 'btn-add-nested'; btn.innerText = '+ Add Item'; btn.onclick = () => this.addItemToArray(path); nest.appendChild(btn);
            }
         } else {
            Object.keys(value).forEach(k => { if(!k.startsWith('@')) nest.appendChild(this.createField(k, value[k], [...path, k])); });
+
+           const valueType = Array.isArray(value['@type']) ? value['@type'][0] : value['@type'];
+           const parentType = this.getTypeForPath(path.slice(0, -1));
+           const available = this.registry.getFieldsForType(valueType || parentType);
+           const existing = new Set(Object.keys(value).filter(k => !k.startsWith('@')));
+           const missing = available.filter(f => !existing.has(f));
+
+           if (missing.length > 0) {
+              const controls = document.createElement('div'); controls.className = 'nested-add-row';
+              const select = document.createElement('select'); select.className = 'schema-input';
+              missing.forEach(f => { const opt = document.createElement('option'); opt.value = f; opt.innerText = f; select.appendChild(opt); });
+              const btn = document.createElement('button'); btn.className = 'btn-add-nested'; btn.innerText = '+ Add Field';
+              btn.onclick = () => this.addFieldToObject(path, select.value);
+              controls.appendChild(select); controls.appendChild(btn);
+              nest.appendChild(controls);
+           }
+
+           const customControls = document.createElement('div'); customControls.className = 'nested-add-row';
+           const customInput = document.createElement('input'); customInput.className = 'schema-input'; customInput.placeholder = 'Custom property name';
+           const customBtn = document.createElement('button'); customBtn.className = 'btn-add-nested'; customBtn.innerText = '+ Add Field';
+           customBtn.onclick = () => { const name = customInput.value.trim(); if (name) { this.addFieldToObject(path, name); customInput.value = ''; } };
+           customControls.appendChild(customInput); customControls.appendChild(customBtn);
+           nest.appendChild(customControls);
         }
         row.appendChild(nest); return row;
     }
@@ -571,9 +796,49 @@ class App {
   }
 
   // --- DATA MODIFIERS ---
-  modifyPath(path, val) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length-1; i++) { if(!ref[path[i]]) ref[path[i]]={}; ref=ref[path[i]]; } ref[path[path.length-1]] = val; this.updateState(s, 'visual'); }
+  modifyPath(path, val) {
+    if (!path.length) {
+      const baseContext = this.state.schema['@context'] || 'https://schema.org';
+      const rootValue = typeof val === 'object' && val !== null ? { '@context': baseContext, ...val } : val;
+      this.updateState(rootValue, 'visual');
+      return;
+    }
+
+    let s = JSON.parse(JSON.stringify(this.state.schema));
+    let ref = s;
+    for (let i = 0; i < path.length - 1; i++) {
+      const key = path[i];
+      if (ref[key] === undefined) {
+        ref[key] = typeof path[i + 1] === 'number' ? [] : {};
+      }
+      ref = ref[key];
+    }
+    ref[path[path.length - 1]] = val;
+    this.updateState(s, 'visual');
+  }
   deletePath(path) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length-1; i++) ref=ref[path[i]]; const last = path[path.length-1]; if(Array.isArray(ref)) ref.splice(last, 1); else delete ref[last]; this.updateState(s, 'visual'); }
-  addItemToArray(path) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length; i++) ref=ref[path[i]]; if(Array.isArray(ref)) { const tmpl = ref.length > 0 ? JSON.parse(JSON.stringify(ref[0])) : {"@type":"Thing"}; const wipe = (o) => Object.keys(o).forEach(k=>{ if(typeof o[k]==='object') wipe(o[k]); else o[k]=""}); wipe(tmpl); ref.push(tmpl); } this.updateState(s, 'visual'); }
+  updateType(path, typeName) { const next = JSON.parse(JSON.stringify(this.state.schema)); let ref = next; for (let i = 0; i < path.length; i++) { if (!ref[path[i]]) ref[path[i]] = {}; ref = ref[path[i]]; } if (ref && typeof ref === 'object') { ref['@type'] = typeName || 'Thing'; this.updateState(next, 'visual'); } }
+  addItemToArray(path) {
+    let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length; i++) ref=ref[path[i]];
+    if(Array.isArray(ref)) {
+      const parentField = path[path.length-1];
+      const parentType = this.getTypeForPath(path.slice(0, -1), s);
+      const isPrimitiveArray = FIELD_TYPES[parentField] === 'array' || ref.every(v => typeof v !== 'object');
+      if (isPrimitiveArray) {
+        ref.push("");
+      } else {
+        const tmpl = ref.length > 0 ? JSON.parse(JSON.stringify(ref[0])) : this.createDefaultNestedItem(parentField, parentType);
+        const wipe = (o) => Object.keys(o).forEach(k=>{ if(typeof o[k]==='object') wipe(o[k]); else o[k]=""}); if(typeof tmpl === 'object') wipe(tmpl);
+        ref.push(tmpl);
+      }
+    }
+    this.updateState(s, 'visual');
+  }
+  addFieldToObject(path, field) { let s = JSON.parse(JSON.stringify(this.state.schema)); let ref = s; for(let i=0; i<path.length; i++) ref=ref[path[i]]; if(ref && typeof ref === 'object' && !Array.isArray(ref)) { const parentType = this.getTypeForPath(path, s); ref[field] = this.defaultValueForField(field, parentType); } this.updateState(s, 'visual'); }
+  createDefaultNestedItem(parentField, parentType) {
+    const bestType = this.resolveNestedType(parentField, parentType);
+    return bestType ? { '@type': bestType } : { '@type': 'Thing' };
+  }
 
   updateState(newSchema, source) {
     if (source === 'json') {
@@ -758,53 +1023,105 @@ class App {
     btn.innerHTML = 'Thinking...';
     document.getElementById('progress-container').style.display = 'block';
 
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (!tabs || !tabs[0]) {
-        this.toast("No active tab found", "error");
+    try {
+      const res = await this.scanActivePage();
+      const prompt = `Generate JSON-LD Schema for:\n${res.content}\nStrict JSON only.`;
+
+      try {
+        const data = await this.net.fetchWithRetry(
+          `https://generativelanguage.googleapis.com/v1beta/models/${this.state.modelName}:generateContent?key=${this.state.geminiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+          },
+          (a, m) => document.querySelector('.progress-fill').style.width = `${(a / m) * 100}%`
+        );
+
+        const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!candidateText) {
+          throw new Error("No AI response content");
+        }
+
+        const sanitized = candidateText.replace(/```json/g, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(sanitized);
+
+        this.updateState(parsed);
+        this.toast("AI Generated!");
+      } catch (error) {
+        console.error('AI generation failed', error);
+        const message = error instanceof Error ? error.message : 'AI Error';
+        this.toast(message, "error");
+      } finally {
         this.resetAiButton(btn);
-        return;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to scan page';
+      this.toast(message, 'error');
+      this.resetAiButton(btn);
+    }
+  }
+
+  async runAIForCard(path, typeName, button) {
+    if (!this.state.geminiKey) {
+      this.toast('API Key Required', 'error');
+      return;
+    }
+
+    if (!typeName) {
+      this.toast('Schema type required', 'error');
+      return;
+    }
+
+    const targetBtn = button;
+    const originalHtml = targetBtn?.innerHTML;
+    if (targetBtn) {
+      targetBtn.disabled = true;
+      targetBtn.innerHTML = '<span class="material-icons rotating">autorenew</span>';
+    }
+
+    try {
+      const res = await this.scanActivePage();
+      const existing = this.getValueAtPath(path) || {};
+      const prompt = `Generate a JSON-LD object for schema.org type "${typeName}" using the following page context. Only return a single JSON object (not wrapped in @graph or arrays) with @type set to ${typeName}. Preserve existing values when useful.\nPage Context:\n${res.content}\nExisting Data (optional):\n${JSON.stringify(existing)}`;
+
+      const data = await this.net.fetchWithRetry(
+        `https://generativelanguage.googleapis.com/v1beta/models/${this.state.modelName}:generateContent?key=${this.state.geminiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        }
+      );
+
+      const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!candidateText) {
+        throw new Error('No AI response content');
       }
 
-      chrome.tabs.sendMessage(tabs[0].id, { action: "scanPage" }, async (res) => {
-        if (chrome.runtime.lastError || !res) {
-          console.warn('AI scan request failed', chrome.runtime.lastError);
-          this.toast("Unable to scan page", "error");
-          this.resetAiButton(btn);
-          return;
-        }
+      const sanitized = candidateText.replace(/```json/g, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(sanitized);
+      const nextValue = Array.isArray(parsed) ? parsed[0] : parsed;
+      if (!nextValue || typeof nextValue !== 'object') {
+        throw new Error('AI response was not an object');
+      }
 
-        const prompt = `Generate JSON-LD Schema for:\n${res.content}\nStrict JSON only.`;
+      if (!nextValue['@type']) {
+        nextValue['@type'] = typeName;
+      }
 
-        try {
-          const data = await this.net.fetchWithRetry(
-            `https://generativelanguage.googleapis.com/v1beta/models/${this.state.modelName}:generateContent?key=${this.state.geminiKey}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-            },
-            (a, m) => document.querySelector('.progress-fill').style.width = `${(a / m) * 100}%`
-          );
-
-          const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (!candidateText) {
-            throw new Error("No AI response content");
-          }
-
-          const sanitized = candidateText.replace(/```json/g, '').replace(/```/g, '').trim();
-          const parsed = JSON.parse(sanitized);
-
-          this.updateState(parsed);
-          this.toast("AI Generated!");
-        } catch (error) {
-          console.error('AI generation failed', error);
-          const message = error instanceof Error ? error.message : 'AI Error';
-          this.toast(message, "error");
-        } finally {
-          this.resetAiButton(btn);
-        }
-      });
-    });
+      this.modifyPath(path, nextValue);
+      this.toast(`Updated ${typeName} with AI`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'AI Error';
+      console.error('AI generation for card failed', error);
+      this.toast(message, 'error');
+    } finally {
+      if (targetBtn) {
+        targetBtn.disabled = false;
+        targetBtn.innerHTML = originalHtml;
+      }
+    }
   }
 
   resetAiButton(btn) {
@@ -903,6 +1220,26 @@ class App {
     } else {
       this.toast(issues.join(' '), 'error');
     }
+  }
+
+  async scanActivePage() {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs || !tabs[0]) {
+          reject(new Error('No active tab found'));
+          return;
+        }
+
+        chrome.tabs.sendMessage(tabs[0].id, { action: 'scanPage' }, (res) => {
+          if (chrome.runtime.lastError || !res) {
+            reject(new Error('Unable to scan page'));
+            return;
+          }
+
+          resolve(res);
+        });
+      });
+    });
   }
 
   toast(msg, type="info") { const t = document.createElement('div'); t.className = `toast ${type}`; t.innerText = msg; document.getElementById('toast-container').appendChild(t); setTimeout(()=>t.remove(), 3000); }
