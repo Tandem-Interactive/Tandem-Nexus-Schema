@@ -56,7 +56,9 @@ class SchemaRegistry {
   constructor() {
     this.types = new Set(Object.keys(SCHEMA_LIB));
     this.properties = {};
+    this.allProperties = new Set();
     this.loaded = false;
+    this.rebuildPropertySet();
   }
 
   async load() {
@@ -107,6 +109,21 @@ class SchemaRegistry {
     if (!data || typeof data !== 'object') return;
     (data.types || []).forEach((t) => this.types.add(t));
     this.properties = data.properties || {};
+    this.rebuildPropertySet();
+  }
+
+  rebuildPropertySet() {
+    this.allProperties = new Set();
+
+    Object.values(this.properties || {}).forEach((list) => {
+      (list || []).forEach((prop) => this.allProperties.add(prop));
+    });
+
+    Object.values(SCHEMA_LIB).forEach(({ fields }) => {
+      (fields || []).forEach((field) => this.allProperties.add(field));
+    });
+
+    Object.keys(DEFAULT_NESTED_TYPES).forEach((field) => this.allProperties.add(field));
   }
 
   getAllTypes() {
@@ -119,6 +136,10 @@ class SchemaRegistry {
     const curated = SCHEMA_LIB[normalized]?.fields || [];
     const fromRegistry = this.properties[normalized] || [];
     return [...new Set([...(curated || []), ...(fromRegistry || [])])].sort();
+  }
+
+  isKnownProperty(name) {
+    return this.allProperties.has(name);
   }
 }
 
@@ -639,10 +660,72 @@ class App {
   }
 
   getPrimarySchemaNode() {
-    const aggregate = this.state.schema || {};
-    const pool = Array.isArray(aggregate['@graph']) ? aggregate['@graph'] : [aggregate];
-    const candidate = pool.find((item) => item && typeof item === 'object' && Object.keys(item).length > 0);
-    return candidate || null;
+    const featureTypes = new Set([
+      'WebPage', 'Article', 'WebSite', 'Product', 'LocalBusiness',
+      'Organization', 'Event', 'FAQPage', 'BreadcrumbList', 'Review'
+    ]);
+
+    const candidates = [];
+
+    const walkNode = (node, sourceIndex = 0) => {
+      if (!node || typeof node !== 'object') return;
+
+      if (Array.isArray(node)) {
+        node.forEach((child) => walkNode(child, sourceIndex));
+        return;
+      }
+
+      // Capture explicitly typed nodes so preview can choose the best representative.
+      if (node['@type']) {
+        candidates.push({ node, sourceIndex });
+      }
+
+      // Traverse nested graphs and objects to surface embedded schema blocks.
+      if (Array.isArray(node['@graph'])) {
+        node['@graph'].forEach((child) => walkNode(child, sourceIndex));
+      }
+
+      Object.keys(node).forEach((key) => {
+        if (key === '@graph') return;
+        const value = node[key];
+        if (value && typeof value === 'object') {
+          walkNode(value, sourceIndex);
+        }
+      });
+    };
+
+    if (Array.isArray(this.state.schemaList) && this.state.schemaList.length) {
+      this.state.schemaList.forEach((schema, idx) => walkNode(schema, idx));
+    } else {
+      walkNode(this.state.schema || {}, 0);
+    }
+
+    if (!candidates.length) {
+      return null;
+    }
+
+    const scoreCandidate = ({ node, sourceIndex }) => {
+      const types = Array.isArray(node['@type']) ? node['@type'] : [node['@type']];
+      const typeScore = types.some((t) => featureTypes.has(t)) ? 4 : 0;
+      const textScore = (node.name || node.headline ? 3 : 0) + (node.description || node.reviewBody || node.text ? 2 : 0);
+      const urlScore = node.url ? 1 : 0;
+      const ratingScore = (node.aggregateRating || node.reviewRating) ? 1 : 0;
+      const currentSchemaScore = sourceIndex === this.state.currentSchemaIndex ? 5 : 0;
+      return typeScore + textScore + urlScore + ratingScore + currentSchemaScore;
+    };
+
+    let best = candidates[0];
+    let bestScore = scoreCandidate(best);
+
+    candidates.forEach((candidate) => {
+      const score = scoreCandidate(candidate);
+      if (score > bestScore) {
+        best = candidate;
+        bestScore = score;
+      }
+    });
+
+    return best?.node || null;
   }
 
   escapeHtml(value) {
@@ -1304,9 +1387,17 @@ class App {
 
       Object.entries(node).forEach(([key, value]) => {
         if (key.startsWith('@')) return;
-        if (allowedProps && !allowedProps.has(key)) {
-          issues.push(`Property "${key}" is not defined for ${type} at ${path}.`);
+
+        if (!this.registry.isKnownProperty(key)) {
+          issues.push(`Property "${key}" is not recognized by schema.org at ${path}.`);
+          return;
         }
+
+        if (allowedProps && allowedProps.size && !allowedProps.has(key)) {
+          // The property exists in the vocabulary but is not listed for the specific type.
+          // Avoid false positives for inherited properties by treating this as informational only.
+        }
+
         walk(value, `${path}.${key}`);
       });
     };
