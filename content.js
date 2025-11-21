@@ -12,17 +12,26 @@ if (!window.hasTandemListener) {
    * Find a Google Tag Manager container ID from script tags or raw HTML.
    */
   function getGtmId() {
-    const scripts = document.getElementsByTagName('script');
-    for (const s of scripts) {
-      if (s.src && s.src.includes('googletagmanager.com/gtm.js')) {
-        const match = s.src.match(/[?&]id=(GTM-[A-Z0-9]+)/);
-        if (match) return match[1];
+    if (window.google_tag_manager && typeof window.google_tag_manager === 'object') {
+      const gtmKey = Object.keys(window.google_tag_manager).find((key) => key.startsWith('GTM-'));
+      if (gtmKey) {
+        return gtmKey;
       }
     }
 
-    const html = document.documentElement.innerHTML;
-    const match = html.match(/(GTM-[A-Z0-9]{6,})/);
-    return match ? match[1] : null;
+    const scripts = document.querySelectorAll('script[src*="googletagmanager.com"]');
+    for (const script of scripts) {
+      const idMatch = script.src.match(/[?&]id=(GTM-[A-Z0-9]+)/);
+      if (idMatch) {
+        return idMatch[1];
+      }
+      const pathMatch = script.src.match(/(GTM-[A-Z0-9]{6,})/);
+      if (pathMatch) {
+        return pathMatch[1];
+      }
+    }
+
+    return null;
   }
 
   /**

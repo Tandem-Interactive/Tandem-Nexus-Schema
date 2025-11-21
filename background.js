@@ -4,7 +4,8 @@
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'schema-status') {
     // Keep the default extension icon; status remains visible inside the popup.
-    return;
+    sendResponse({ received: true });
+    return false;
   }
 
   if (request.action === 'authenticate') {

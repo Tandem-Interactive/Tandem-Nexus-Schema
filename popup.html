@@ -59,6 +59,21 @@
     </div>
   </div>
 
+  <!-- PREVIEW MODAL -->
+  <div id="preview-modal" class="modal">
+    <div class="modal-content preview">
+      <div class="modal-header">
+        <h3>Search Preview</h3>
+        <span class="material-icons close-modal" style="cursor:pointer;">close</span>
+      </div>
+      <div class="modal-body">
+        <div id="preview-content" class="preview-content">
+          <p class="muted">Generate or edit a schema to see a live preview.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- APP CONTAINER -->
   <div id="app-container">
     <!-- APP HEADER -->
@@ -103,6 +118,9 @@
 
         <button id="validate-btn" class="btn-icon-tool" title="Validate">
           <span class="material-icons">fact_check</span>
+        </button>
+        <button id="preview-btn" class="btn-icon-tool" title="Preview Search Result">
+          <span class="material-icons">visibility</span>
         </button>
         <button id="rich-results-btn" class="btn-icon-tool" title="Rich Results Test">
           <span class="material-icons">open_in_new</span>
