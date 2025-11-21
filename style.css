@@ -15,7 +15,7 @@
 
 body {
   width: 400px;
-  min-height: 720px;
+  min-height: 920px;
   height: auto;
   margin: 0;
   font-family: 'Inter', sans-serif;
@@ -160,7 +160,7 @@ main {
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-height: 720px;
+  min-height: 920px;
   overflow: auto;
   padding-bottom: 120px;
 }
@@ -231,30 +231,6 @@ main {
   margin: 0 auto;
   width: 100%;
   box-sizing: border-box;
-}
-.window-resize-handle {
-  position: fixed;
-  right: 12px;
-  bottom: 8px;
-  width: 64px;
-  height: 10px;
-  background: #d1d5db;
-  border-radius: 9999px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
-  cursor: ns-resize;
-  z-index: 40;
-  opacity: 0.9;
-  transition: background 0.2s ease, opacity 0.2s ease;
-}
-
-.window-resize-handle:hover {
-  background: #9ca3af;
-  opacity: 1;
-}
-
-body.is-resizing {
-  cursor: ns-resize;
-  user-select: none;
 }
 .btn-primary { background: var(--tandem-navy); color: white; border: none; width: 100%; padding: 12px; border-radius: 8px; font-weight: 600; cursor: pointer; display: flex; justify-content: center; gap: 8px; align-items: center; }
 .btn-select { background: var(--tandem-blue); color: white; border: none; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; }
